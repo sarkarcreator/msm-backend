@@ -24,7 +24,7 @@ Route::middleware('auth:sanctum')->group(function () {
         'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
         'repair-updates', 'inventory-transactions', 'users', 'roles',
         'permissions', 'settings', 'notifications', 'manual-repair-receipts',
-        'mobile-wallet-transactions', 'patients', 'assistants', 'licenses',
+        'mobile-wallet-transactions', 'patients', 'assistants', 'master-catalogs', 'licenses',
         'audit-logs'
     ] as $resource) {
         Route::apiResource($resource, ResourceController::class)->parameters([$resource => 'id']);

@@ -33,6 +33,7 @@ class SyncService
         'mobile_wallet_transactions' => \App\Models\MobileWalletTransaction::class,
         'patients' => \App\Models\Patient::class,
         'assistants' => \App\Models\Assistant::class,
+        'master_catalogs' => \App\Models\MasterCatalog::class,
         'licenses' => \App\Models\License::class,
         'audit_logs' => \App\Models\AuditLog::class,
         'inventory_transactions' => \App\Models\InventoryTransaction::class,
