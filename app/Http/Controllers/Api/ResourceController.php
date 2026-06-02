@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Role;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -43,7 +44,7 @@ class ResourceController extends Controller
 
     public function store(Request $request)
     {
-        $payload = $request->all();
+        $payload = $this->payload($request);
         $payload['uuid'] ??= (string) Str::uuid();
         $record = $this->model($request)->create($payload);
         $this->audit($request, 'create', $record->uuid, $payload);
@@ -59,8 +60,9 @@ class ResourceController extends Controller
     public function update(Request $request, string $id)
     {
         $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
-        $record->update($request->all());
-        $this->audit($request, 'update', $record->uuid, $request->all());
+        $payload = $this->payload($request, true);
+        $record->update($payload);
+        $this->audit($request, 'update', $record->uuid, $payload);
 
         return $record;
     }
@@ -101,5 +103,31 @@ class ResourceController extends Controller
             'details' => "{$action} {$resource}",
             'metadata' => $payload,
         ]);
+    }
+
+    private function payload(Request $request, bool $updating = false): array
+    {
+        $resource = explode('.', $request->route()->getName())[0];
+        $payload = $request->except(['id', 'created_at', 'updated_at', 'deleted_at']);
+
+        if ($resource !== 'users') {
+            return $payload;
+        }
+
+        unset($payload['role'], $payload['status']);
+
+        if ($request->filled('role')) {
+            $role = Role::firstOrCreate(
+                ['name' => $request->string('role')->toString()],
+                ['uuid' => (string) Str::uuid()]
+            );
+            $payload['role_id'] = $role->id;
+        }
+
+        if ($updating && blank($request->input('password'))) {
+            unset($payload['password']);
+        }
+
+        return $payload;
     }
 }
