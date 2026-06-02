@@ -24,7 +24,7 @@ class AuthController extends Controller
         }
 
         return [
-            'user' => $user,
+            'user' => $user->load('role'),
             'token' => $user->createToken('dsh-pos')->plainTextToken,
         ];
     }

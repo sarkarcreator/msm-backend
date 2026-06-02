@@ -39,11 +39,13 @@ class ResourceController extends Controller
 
     public function index(Request $request)
     {
+        $this->authorizeAccess($request);
         return $this->model($request)->latest('updated_at')->paginate($request->integer('per_page', 50));
     }
 
     public function store(Request $request)
     {
+        $this->authorizeAccess($request);
         $payload = $this->payload($request);
         $payload['uuid'] ??= (string) Str::uuid();
         $record = $this->model($request)->create($payload);
@@ -54,11 +56,13 @@ class ResourceController extends Controller
 
     public function show(Request $request, string $id)
     {
+        $this->authorizeAccess($request);
         return $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
     }
 
     public function update(Request $request, string $id)
     {
+        $this->authorizeAccess($request);
         $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
         $payload = $this->payload($request, true);
         $record->update($payload);
@@ -69,6 +73,7 @@ class ResourceController extends Controller
 
     public function destroy(Request $request, string $id)
     {
+        $this->authorizeAccess($request);
         $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
         $request->boolean('force') ? $record->forceDelete() : $record->delete();
         $this->audit($request, $request->boolean('force') ? 'permanent_delete' : 'soft_delete', $record->uuid, $record->toArray());
@@ -103,6 +108,34 @@ class ResourceController extends Controller
             'details' => "{$action} {$resource}",
             'metadata' => $payload,
         ]);
+    }
+
+    private function authorizeAccess(Request $request): void
+    {
+        $resource = explode('.', $request->route()->getName())[0];
+        $role = optional($request->user()?->role)->name ?: 'Cashier';
+
+        $allowed = match ($role) {
+            'Super Admin' => array_keys($this->models),
+            'Admin' => [
+                'products', 'categories', 'brands', 'customers', 'customer-ledgers',
+                'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
+                'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
+                'repair-updates', 'inventory-transactions', 'users', 'roles',
+                'notifications', 'manual-repair-receipts',
+            ],
+            'Manager' => [
+                'products', 'categories', 'brands', 'customers', 'customer-ledgers',
+                'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
+                'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
+                'repair-updates', 'inventory-transactions', 'notifications',
+                'manual-repair-receipts',
+            ],
+            'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'notifications'],
+            default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'notifications'],
+        };
+
+        abort_unless(in_array($resource, $allowed, true), 403, 'You do not have permission to access this module.');
     }
 
     private function payload(Request $request, bool $updating = false): array
