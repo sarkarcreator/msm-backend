@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Role;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -162,6 +163,19 @@ class ResourceController extends Controller
     {
         $resource = explode('.', $request->route()->getName())[0];
         $payload = $request->except(['id', 'created_at', 'updated_at', 'deleted_at', 'sync_status']);
+
+        if ($resource === 'licenses') {
+            $payload = array_intersect_key($payload, array_flip([
+                'uuid', 'license_key', 'activation_code', 'owner_name', 'device_id',
+                'type', 'status', 'trial', 'expiry_date', 'activated_at', 'metadata',
+            ]));
+
+            if (! empty($payload['activated_at'])) {
+                $payload['activated_at'] = Carbon::parse($payload['activated_at'])->format('Y-m-d H:i:s');
+            }
+
+            return $payload;
+        }
 
         if ($resource !== 'users') {
             return $payload;
