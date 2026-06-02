@@ -34,6 +34,9 @@ class ResourceController extends Controller
         'settings' => \App\Models\Setting::class,
         'notifications' => \App\Models\Notification::class,
         'manual-repair-receipts' => \App\Models\ManualRepairReceipt::class,
+        'mobile-wallet-transactions' => \App\Models\MobileWalletTransaction::class,
+        'patients' => \App\Models\Patient::class,
+        'assistants' => \App\Models\Assistant::class,
         'licenses' => \App\Models\License::class,
         'audit-logs' => \App\Models\AuditLog::class,
     ];
@@ -143,17 +146,21 @@ class ResourceController extends Controller
                 'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
                 'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
                 'repair-updates', 'inventory-transactions', 'users', 'roles',
-                'notifications', 'manual-repair-receipts',
+                'notifications', 'manual-repair-receipts', 'mobile-wallet-transactions',
+                'patients', 'assistants',
             ],
             'Manager' => [
                 'products', 'categories', 'brands', 'customers', 'customer-ledgers',
                 'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
                 'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
                 'repair-updates', 'inventory-transactions', 'notifications',
-                'manual-repair-receipts',
+                'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'assistants',
             ],
-            'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'notifications'],
-            default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'notifications'],
+            'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications'],
+            'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications'],
+            'Compounder' => ['patients', 'notifications'],
+            'Assistant' => ['patients', 'notifications'],
+            default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications'],
         };
 
         abort_unless(in_array($resource, $allowed, true), 403, 'You do not have permission to access this module.');

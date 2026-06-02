@@ -23,7 +23,8 @@ Route::middleware('auth:sanctum')->group(function () {
         'suppliers', 'supplier-ledgers', 'sales', 'sale-items', 'purchases',
         'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
         'repair-updates', 'inventory-transactions', 'users', 'roles',
-        'permissions', 'settings', 'notifications', 'manual-repair-receipts', 'licenses',
+        'permissions', 'settings', 'notifications', 'manual-repair-receipts',
+        'mobile-wallet-transactions', 'patients', 'assistants', 'licenses',
         'audit-logs'
     ] as $resource) {
         Route::apiResource($resource, ResourceController::class)->parameters([$resource => 'id']);
