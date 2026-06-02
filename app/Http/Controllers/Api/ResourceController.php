@@ -161,7 +161,7 @@ class ResourceController extends Controller
     private function payload(Request $request, bool $updating = false): array
     {
         $resource = explode('.', $request->route()->getName())[0];
-        $payload = $request->except(['id', 'created_at', 'updated_at', 'deleted_at']);
+        $payload = $request->except(['id', 'created_at', 'updated_at', 'deleted_at', 'sync_status']);
 
         if ($resource !== 'users') {
             return $payload;
