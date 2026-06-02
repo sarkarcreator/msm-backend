@@ -46,6 +46,8 @@ class LicenseActivationController extends Controller
         }
 
         $role = Role::firstOrCreate(['name' => 'Admin'], ['uuid' => (string) Str::uuid()]);
+        $shopName = $data['shop_name'] ?? $license->owner_name;
+        $businessType = $license->business_type ?: ($license->metadata['business_type'] ?? 'Mobile Shop');
         $user = User::updateOrCreate(
             ['email' => $data['email']],
             [
@@ -53,11 +55,22 @@ class LicenseActivationController extends Controller
                 'name' => $data['name'],
                 'password' => $data['password'],
                 'role_id' => $role->id,
+                'license_uuid' => $license->uuid,
+                'business_type' => $businessType,
+                'shop_name' => $shopName,
             ]
         );
 
+        $settings = [
+            'software_name' => 'Market Sales Management System',
+            'shop_name' => $shopName,
+            'company_name' => $shopName,
+            'business_type' => $businessType,
+        ];
+
         $metadata = array_merge($license->metadata ?: [], [
-            'shop_name' => $data['shop_name'] ?? $license->owner_name,
+            'shop_name' => $shopName,
+            'business_type' => $businessType,
             'admin_email' => $user->email,
             'activated_device_id' => $data['device_id'],
         ]);
@@ -71,6 +84,7 @@ class LicenseActivationController extends Controller
 
         return [
             'license' => $license->fresh(),
+            'settings' => $settings,
             'user' => $user->load('role'),
             'token' => $user->createToken('dsh-pos')->plainTextToken,
         ];

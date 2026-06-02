@@ -166,7 +166,7 @@ class ResourceController extends Controller
 
         if ($resource === 'licenses') {
             $payload = array_intersect_key($payload, array_flip([
-                'uuid', 'license_key', 'activation_code', 'owner_name', 'device_id',
+                'uuid', 'license_key', 'activation_code', 'owner_name', 'business_type', 'device_id',
                 'type', 'status', 'trial', 'expiry_date', 'activated_at', 'metadata',
             ]));
 

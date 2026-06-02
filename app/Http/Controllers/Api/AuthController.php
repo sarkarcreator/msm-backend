@@ -25,6 +25,7 @@ class AuthController extends Controller
 
         return [
             'user' => $user->load('role'),
+            'settings' => $this->settingsFor($user),
             'token' => $user->createToken('dsh-pos')->plainTextToken,
         ];
     }
@@ -39,5 +40,16 @@ class AuthController extends Controller
         $request->user()->currentAccessToken()?->delete();
 
         return response()->noContent();
+    }
+
+    private function settingsFor(User $user): array
+    {
+        $shopName = $user->shop_name ?: 'Retail Shop';
+        return [
+            'software_name' => 'Market Sales Management System',
+            'shop_name' => $shopName,
+            'company_name' => $shopName,
+            'business_type' => $user->business_type ?: 'General Store',
+        ];
     }
 }
