@@ -48,7 +48,7 @@ class ResourceController extends Controller
         $this->authorizeAccess($request);
         $payload = $this->payload($request);
         $payload['uuid'] ??= (string) Str::uuid();
-        $record = $this->model($request)->create($payload);
+        $record = $this->storeRecord($request, $payload);
         $this->audit($request, 'create', $record->uuid, $payload);
 
         return response($record, 201);
@@ -108,6 +108,26 @@ class ResourceController extends Controller
             'details' => "{$action} {$resource}",
             'metadata' => $payload,
         ]);
+    }
+
+    private function storeRecord(Request $request, array $payload)
+    {
+        $resource = explode('.', $request->route()->getName())[0];
+        $query = $this->model($request);
+
+        if ($resource === 'licenses') {
+            $record = $query
+                ->where('uuid', $payload['uuid'])
+                ->orWhere('license_key', $payload['license_key'] ?? '')
+                ->first();
+
+            if ($record) {
+                $record->update($payload);
+                return $record->fresh();
+            }
+        }
+
+        return $query->create($payload);
     }
 
     private function authorizeAccess(Request $request): void
