@@ -2,11 +2,13 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\LicenseActivationController;
 use App\Http\Controllers\Api\ResourceController;
 use App\Http\Controllers\Api\SyncController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/license/activate', [LicenseActivationController::class, 'activate']);
 Route::get('/health', fn () => ['status' => 'ok']);
 
 Route::middleware('auth:sanctum')->group(function () {
