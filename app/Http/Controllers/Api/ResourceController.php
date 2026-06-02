@@ -79,9 +79,18 @@ class ResourceController extends Controller
     public function destroy(Request $request, string $id)
     {
         $this->authorizeAccess($request);
-        $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
-        $request->boolean('force') ? $record->forceDelete() : $record->delete();
-        $this->audit($request, $request->boolean('force') ? 'permanent_delete' : 'soft_delete', $record->uuid, $record->toArray());
+        $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->first();
+
+        if (! $record) {
+            return response()->noContent();
+        }
+
+        $payload = $record->toArray();
+        $uuid = $record->uuid;
+        $force = $request->boolean('force');
+
+        $force ? $record->forceDelete() : $record->delete();
+        $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
 
         return response()->noContent();
     }
