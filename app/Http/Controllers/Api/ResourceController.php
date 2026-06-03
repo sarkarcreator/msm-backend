@@ -45,7 +45,15 @@ class ResourceController extends Controller
     public function index(Request $request)
     {
         $this->authorizeAccess($request);
-        return $this->model($request)->latest('updated_at')->paginate($request->integer('per_page', 50));
+        $query = $this->model($request);
+        $resource = explode('.', $request->route()->getName())[0];
+        $role = optional($request->user()?->role)->name;
+
+        if ($resource === 'users' && $role === 'Super Admin') {
+            $query->whereHas('role', fn ($roleQuery) => $roleQuery->where('name', 'Super Admin'));
+        }
+
+        return $query->latest('updated_at')->paginate($request->integer('per_page', 50));
     }
 
     public function store(Request $request)
