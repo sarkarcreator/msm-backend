@@ -32,7 +32,12 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        return $request->user()->load('role');
+        $user = $request->user()->load('role');
+
+        return [
+            'user' => $user,
+            'settings' => $this->settingsFor($user),
+        ];
     }
 
     public function logout(Request $request)
