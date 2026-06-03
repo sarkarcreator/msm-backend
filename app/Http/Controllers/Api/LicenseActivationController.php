@@ -67,6 +67,7 @@ class LicenseActivationController extends Controller
             'shop_name' => $shopName,
             'company_name' => $shopName,
             'business_type' => $businessType,
+            'license_uuid' => $license->uuid,
         ], array_intersect_key($theme, array_flip([
             'theme_color', 'logo', 'favicon', 'login_screen', 'invoice_header',
             'footer', 'footer_branding', 'contact_number', 'address',

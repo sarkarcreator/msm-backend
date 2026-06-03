@@ -58,6 +58,7 @@ class AuthController extends Controller
                 'shop_name' => 'DSH Digital Solutions Hub',
                 'company_name' => 'DSH Digital Solutions Hub',
                 'business_type' => 'General Store',
+                'license_uuid' => '',
             ];
         }
 
@@ -70,6 +71,7 @@ class AuthController extends Controller
             'shop_name' => $shopName,
             'company_name' => $shopName,
             'business_type' => $user->business_type ?: ($license?->business_type ?: ($licenseMeta['business_type'] ?? 'General Store')),
+            'license_uuid' => $user->license_uuid ?: '',
         ], array_intersect_key($licenseMeta, array_flip([
             'theme_color', 'logo', 'favicon', 'login_screen', 'invoice_header',
             'footer', 'footer_branding', 'contact_number', 'address',

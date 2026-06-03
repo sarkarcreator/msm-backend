@@ -10,6 +10,23 @@ use Illuminate\Support\Str;
 
 class ResourceController extends Controller
 {
+    private array $licenseScopedResources = [
+        'products', 'categories', 'brands', 'customers', 'customer-ledgers', 'suppliers',
+        'supplier-ledgers', 'sales', 'sale-items', 'purchases', 'purchase-items',
+        'expenses', 'repairs', 'repair-updates', 'payments', 'cashbook', 'users',
+        'settings', 'notifications', 'inventory-transactions', 'manual-repair-receipts',
+        'mobile-wallet-transactions', 'patients', 'assistants', 'hospital-prescriptions',
+        'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports',
+        'hospital-bills', 'hospital-bill-items', 'master-catalogs',
+    ];
+
+    private array $hospitalOnlyResources = [
+        'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks',
+        'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items',
+    ];
+
+    private array $repairOnlyResources = ['repairs', 'repair-updates', 'manual-repair-receipts'];
+
     private array $models = [
         'products' => \App\Models\Product::class,
         'categories' => \App\Models\Category::class,
@@ -59,10 +76,6 @@ class ResourceController extends Controller
         if ($resource === 'users' && $role === 'Super Admin') {
             $query->whereHas('role', fn ($roleQuery) => $roleQuery->where('name', 'Super Admin'));
         }
-        if ($role !== 'Super Admin' && $request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
-            $query->where('license_uuid', $request->user()->license_uuid);
-        }
-
         return $query->latest('updated_at')->paginate($request->integer('per_page', 50));
     }
 
@@ -80,13 +93,17 @@ class ResourceController extends Controller
     public function show(Request $request, string $id)
     {
         $this->authorizeAccess($request);
-        return $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
+        return $this->model($request)
+            ->where(fn ($query) => $query->where('uuid', $id)->orWhere('id', $id))
+            ->firstOrFail();
     }
 
     public function update(Request $request, string $id)
     {
         $this->authorizeAccess($request);
-        $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->firstOrFail();
+        $record = $this->model($request)
+            ->where(fn ($query) => $query->where('uuid', $id)->orWhere('id', $id))
+            ->firstOrFail();
         $payload = $this->payload($request, true);
         $record->update($payload);
         $this->audit($request, 'update', $record->uuid, $payload);
@@ -97,7 +114,9 @@ class ResourceController extends Controller
     public function destroy(Request $request, string $id)
     {
         $this->authorizeAccess($request);
-        $record = $this->model($request)->where('uuid', $id)->orWhere('id', $id)->first();
+        $record = $this->model($request)
+            ->where(fn ($query) => $query->where('uuid', $id)->orWhere('id', $id))
+            ->first();
 
         if (! $record) {
             return response()->noContent();
@@ -127,7 +146,14 @@ class ResourceController extends Controller
 
         abort_unless(isset($this->models[$resource]), 404);
 
-        return app($this->models[$resource])->newQuery();
+        $query = app($this->models[$resource])->newQuery();
+        $role = optional($request->user()?->role)->name;
+
+        if ($role !== 'Super Admin' && $request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
+            $query->where('license_uuid', $request->user()->license_uuid);
+        }
+
+        return $query;
     }
 
     private function audit(Request $request, string $action, string $uuid, array $payload): void
@@ -211,6 +237,17 @@ class ResourceController extends Controller
         };
 
         abort_unless(in_array($resource, $allowed, true), 403, 'You do not have permission to access this module.');
+
+        if ($role !== 'Super Admin') {
+            $businessType = $request->user()?->business_type ?: 'General Store';
+            if ($businessType !== 'Hospital') {
+                abort_if(in_array($resource, $this->hospitalOnlyResources, true), 403, 'This module is only available for hospital licenses.');
+            }
+
+            if (! in_array($businessType, ['Mobile Shop', 'Electronics Store'], true)) {
+                abort_if(in_array($resource, $this->repairOnlyResources, true), 403, 'This module is only available for repair-enabled licenses.');
+            }
+        }
     }
 
     private function payload(Request $request, bool $updating = false): array
@@ -234,6 +271,9 @@ class ResourceController extends Controller
         if ($resource !== 'users') {
             if ($request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
                 $payload['license_uuid'] = $request->user()->license_uuid;
+            }
+            if ($request->user()?->business_type && $this->hasLicenseColumn($resource)) {
+                $payload['business_type'] = $request->user()->business_type;
             }
             return $payload;
         }
@@ -295,9 +335,6 @@ class ResourceController extends Controller
 
     private function hasLicenseColumn(string $resource): bool
     {
-        return in_array($resource, [
-            'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks',
-            'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items',
-        ], true);
+        return in_array($resource, $this->licenseScopedResources, true);
     }
 }
