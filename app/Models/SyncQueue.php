@@ -3,6 +3,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 class SyncQueue extends Model
 {
+    protected $table = 'sync_queue';
     protected $guarded = ['id'];
     protected $casts = ['payload' => 'array', 'synced_at' => 'datetime'];
 }
