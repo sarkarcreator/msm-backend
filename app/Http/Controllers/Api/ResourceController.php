@@ -223,7 +223,7 @@ class ResourceController extends Controller
             ],
             'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications', 'master-catalogs'],
             'Hospital Owner' => ['patients', 'assistants', 'users', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
-            'Receptionist' => ['patients', 'hospital-bills', 'notifications', 'master-catalogs'],
+            'Receptionist' => ['patients', 'hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'notifications', 'master-catalogs'],
             'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'master-catalogs'],
             'Compounder' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
             'Assistant' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
@@ -231,7 +231,7 @@ class ResourceController extends Controller
             'Pharmacy Staff' => ['hospital-prescriptions', 'products', 'inventory-transactions', 'notifications', 'medicines'],
             'Lab Technician' => ['lab-reports', 'hospital-tasks', 'notifications'],
             'X-Ray Technician' => ['radiology-reports', 'hospital-tasks', 'notifications'],
-            'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'patients', 'notifications'],
+            'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'patients', 'notifications'],
             'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs'],
             default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
         };
