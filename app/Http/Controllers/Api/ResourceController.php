@@ -201,8 +201,13 @@ class ResourceController extends Controller
         unset($payload['role'], $payload['status']);
 
         if ($request->filled('role')) {
+            $requestedRole = $request->string('role')->toString();
+            $allowedRoles = $this->assignableRoles($request);
+
+            abort_unless(in_array($requestedRole, $allowedRoles, true), 403, 'You cannot assign this user role.');
+
             $role = Role::firstOrCreate(
-                ['name' => $request->string('role')->toString()],
+                ['name' => $requestedRole],
                 ['uuid' => (string) Str::uuid()]
             );
             $payload['role_id'] = $role->id;
@@ -213,5 +218,26 @@ class ResourceController extends Controller
         }
 
         return $payload;
+    }
+
+    private function assignableRoles(Request $request): array
+    {
+        $actorRole = optional($request->user()?->role)->name ?: 'Cashier';
+
+        if ($actorRole === 'Super Admin') {
+            return ['Super Admin', 'Admin', 'Manager', 'Cashier', 'Technician', 'Doctor', 'Compounder', 'Assistant'];
+        }
+
+        $businessType = $request->user()?->business_type ?: 'General Store';
+
+        if ($businessType === 'Hospital') {
+            return ['Doctor', 'Compounder', 'Assistant', 'Manager'];
+        }
+
+        if ($businessType === 'Mobile Shop') {
+            return ['Manager', 'Cashier', 'Technician'];
+        }
+
+        return ['Manager', 'Cashier'];
     }
 }
