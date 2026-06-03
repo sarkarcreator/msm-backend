@@ -8,6 +8,7 @@ use App\Models\Role;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -41,8 +42,22 @@ class LicenseActivationController extends Controller
             throw ValidationException::withMessages(['license_key' => 'This license has expired.']);
         }
 
-        if ($license->device_id && $license->device_id !== $data['device_id']) {
-            throw ValidationException::withMessages(['device_id' => 'This license is already bound to another device.']);
+        $licenseMeta = $license->metadata ?: [];
+        $adminEmail = strtolower($licenseMeta['admin_email'] ?? '');
+
+        if ($license->device_id && $license->device_id !== $data['device_id'] && $adminEmail) {
+            $existingUser = User::where('email', $data['email'])->where('license_uuid', $license->uuid)->first();
+
+            if ($existingUser && strtolower($existingUser->email) === $adminEmail && Hash::check($data['password'], $existingUser->password)) {
+                return [
+                    'license' => $license,
+                    'settings' => $this->settingsForActivatedLicense($license, $existingUser),
+                    'user' => $existingUser->load('role'),
+                    'token' => $existingUser->createToken('dsh-pos')->plainTextToken,
+                ];
+            }
+
+            throw ValidationException::withMessages(['device_id' => 'This license is already active. Please login with the registered admin email, or ask Super Admin to reset device binding.']);
         }
 
         $role = Role::firstOrCreate(['name' => 'Admin'], ['uuid' => (string) Str::uuid()]);
@@ -81,7 +96,7 @@ class LicenseActivationController extends Controller
         ]);
 
         $license->update([
-            'device_id' => $license->device_id ?: $data['device_id'],
+            'device_id' => $data['device_id'],
             'owner_name' => $license->owner_name ?: ($data['shop_name'] ?? $data['name']),
             'activated_at' => $license->activated_at ?: now(),
             'metadata' => $metadata,
@@ -93,5 +108,23 @@ class LicenseActivationController extends Controller
             'user' => $user->load('role'),
             'token' => $user->createToken('dsh-pos')->plainTextToken,
         ];
+    }
+
+    private function settingsForActivatedLicense(License $license, User $user): array
+    {
+        $theme = $license->metadata ?: [];
+        $shopName = $user->shop_name ?: ($theme['shop_name'] ?? $license->owner_name ?? 'Retail Shop');
+        $businessType = $user->business_type ?: ($license->business_type ?: ($theme['business_type'] ?? 'General Store'));
+
+        return array_merge([
+            'software_name' => 'Market Sales Management System',
+            'shop_name' => $shopName,
+            'company_name' => $shopName,
+            'business_type' => $businessType,
+            'license_uuid' => $license->uuid,
+        ], array_intersect_key($theme, array_flip([
+            'theme_color', 'logo', 'favicon', 'login_screen', 'invoice_header',
+            'footer', 'footer_branding', 'contact_number', 'address',
+        ])));
     }
 }
