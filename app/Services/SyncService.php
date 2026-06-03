@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\SyncQueue;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class SyncService
 {
@@ -79,6 +80,7 @@ class SyncService
                 }
 
                 $query = app($model)->newQuery();
+                $data = $this->onlyTableColumns(app($model)->getTable(), $data);
                 $record = $query->where('uuid', $operation['uuid'])->first();
 
                 if ($record && $record->updated_at->gt($operation['client_updated_at'])) {
@@ -104,5 +106,15 @@ class SyncService
                 return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
             })->all();
         });
+    }
+
+    private function onlyTableColumns(string $table, array $data): array
+    {
+        if (! Schema::hasTable($table)) {
+            return $data;
+        }
+
+        $allowed = array_flip(Schema::getColumnListing($table));
+        return array_intersect_key($data, $allowed);
     }
 }
