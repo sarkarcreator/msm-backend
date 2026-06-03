@@ -24,5 +24,7 @@ class DatabaseSeeder extends Seeder
         foreach (['shop_name' => 'Digital Solutions Hub', 'currency' => 'PKR', 'invoice_template' => 'standard'] as $key => $value) {
             Setting::firstOrCreate(['key' => $key], ['uuid' => Str::uuid(), 'value' => $value]);
         }
+
+        $this->call(MedicineSeeder::class);
     }
 }

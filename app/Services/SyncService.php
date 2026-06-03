@@ -34,6 +34,7 @@ class SyncService
         'patients' => \App\Models\Patient::class,
         'assistants' => \App\Models\Assistant::class,
         'master_catalogs' => \App\Models\MasterCatalog::class,
+        'medicines' => \App\Models\Medicine::class,
         'licenses' => \App\Models\License::class,
         'audit_logs' => \App\Models\AuditLog::class,
         'inventory_transactions' => \App\Models\InventoryTransaction::class,
