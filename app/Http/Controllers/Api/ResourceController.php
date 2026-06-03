@@ -214,6 +214,18 @@ class ResourceController extends Controller
             $payload['role_id'] = $role->id;
         }
 
+        $actor = $request->user();
+        $actorRole = optional($actor?->role)->name;
+
+        if ($actorRole !== 'Super Admin') {
+            $payload['license_uuid'] = $actor?->license_uuid;
+            $payload['business_type'] = $actor?->business_type ?: ($payload['business_type'] ?? 'General Store');
+            $payload['shop_name'] = $actor?->shop_name ?: ($payload['shop_name'] ?? 'Retail Shop');
+        } else {
+            $payload['business_type'] = $payload['business_type'] ?? $actor?->business_type;
+            $payload['shop_name'] = $payload['shop_name'] ?? $actor?->shop_name;
+        }
+
         if ($updating && blank($request->input('password'))) {
             unset($payload['password']);
         }
