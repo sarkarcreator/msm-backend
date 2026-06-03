@@ -201,16 +201,14 @@ class ResourceController extends Controller
         $resource = explode('.', $request->route()->getName())[0];
         $query = $this->model($request);
 
-        if ($resource === 'licenses') {
-            $record = $query
-                ->where('uuid', $payload['uuid'])
-                ->orWhere('license_key', $payload['license_key'] ?? '')
-                ->first();
+        $record = $query->where('uuid', $payload['uuid'])->first();
+        if (! $record && $resource === 'licenses') {
+            $record = $query->orWhere('license_key', $payload['license_key'] ?? '')->first();
+        }
 
-            if ($record) {
-                $record->update($payload);
-                return $record->fresh();
-            }
+        if ($record) {
+            $record->update($payload);
+            return $record->fresh();
         }
 
         return $query->create($payload);
