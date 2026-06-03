@@ -21,7 +21,7 @@ class SyncController extends Controller
             'operations.*.client_updated_at' => ['required', 'date'],
         ]);
 
-        return ['results' => $sync->apply($payload['device_id'], $payload['operations'])];
+        return ['results' => $sync->apply($payload['device_id'], $payload['operations'], $request->user())];
     }
 
     public function pull(Request $request)

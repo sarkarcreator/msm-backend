@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\SyncQueue;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 class SyncService
@@ -47,13 +48,34 @@ class SyncService
         'inventory_transactions' => \App\Models\InventoryTransaction::class,
     ];
 
-    public function apply(string $deviceId, array $operations): array
+    private array $licenseScopedEntities = [
+        'products', 'categories', 'brands', 'customers', 'customer_ledgers', 'suppliers',
+        'supplier_ledgers', 'sales', 'sale_items', 'purchases', 'purchase_items',
+        'expenses', 'repairs', 'repair_updates', 'payments', 'cashbook', 'users',
+        'settings', 'notifications', 'inventory_transactions', 'manual_repair_receipts',
+        'mobile_wallet_transactions', 'patients', 'assistants', 'hospital_prescriptions',
+        'hospital_orders', 'hospital_tasks', 'lab_reports', 'radiology_reports',
+        'hospital_bills', 'hospital_bill_items', 'master_catalogs',
+    ];
+
+    public function apply(string $deviceId, array $operations, ?User $actor = null): array
     {
-        return DB::transaction(function () use ($deviceId, $operations) {
-            return collect($operations)->map(function (array $operation) use ($deviceId) {
+        return DB::transaction(function () use ($deviceId, $operations, $actor) {
+            return collect($operations)->map(function (array $operation) use ($deviceId, $actor) {
                 $model = $this->models[$operation['entity']] ?? null;
                 if (! $model) {
                     return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Unknown entity'];
+                }
+
+                $data = $operation['data'] ?? [];
+                $actorRole = optional($actor?->role)->name;
+                if ($actorRole !== 'Super Admin' && in_array($operation['entity'], $this->licenseScopedEntities, true)) {
+                    if ($actor?->license_uuid) {
+                        $data['license_uuid'] = $actor->license_uuid;
+                    }
+                    if ($actor?->business_type) {
+                        $data['business_type'] = $actor->business_type;
+                    }
                 }
 
                 $query = app($model)->newQuery();
@@ -68,7 +90,7 @@ class SyncService
                 } elseif ($operation['action'] === 'delete') {
                     $record?->delete();
                 } else {
-                    $query->updateOrCreate(['uuid' => $operation['uuid']], $operation['data'] ?? []);
+                    $query->updateOrCreate(['uuid' => $operation['uuid']], $data);
                 }
 
                 SyncQueue::create([
@@ -76,7 +98,7 @@ class SyncService
                     'device_id' => $deviceId,
                     'entity' => $operation['entity'],
                     'action' => $operation['action'],
-                    'payload' => $operation['data'] ?? [],
+                    'payload' => $data,
                 ]);
 
                 return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
