@@ -134,9 +134,30 @@ class ResourceController extends Controller
                 $force ? $user->forceDelete() : $user->delete();
             }
         }
+        if ($resource === 'patients') {
+            $this->deletePatientWorkflow($uuid, $force);
+        }
         $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
 
         return response()->noContent();
+    }
+
+    private function deletePatientWorkflow(string $patientUuid, bool $force): void
+    {
+        foreach ([
+            \App\Models\HospitalPrescription::class,
+            \App\Models\HospitalOrder::class,
+            \App\Models\HospitalTask::class,
+            \App\Models\LabReport::class,
+            \App\Models\RadiologyReport::class,
+            \App\Models\HospitalBill::class,
+            \App\Models\HospitalBillItem::class,
+        ] as $model) {
+            $rows = $model::withTrashed()->where('patient_uuid', $patientUuid)->get();
+            foreach ($rows as $row) {
+                $force ? $row->forceDelete() : $row->delete();
+            }
+        }
     }
 
     private function model(Request $request)
