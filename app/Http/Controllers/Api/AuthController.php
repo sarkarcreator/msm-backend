@@ -16,12 +16,25 @@ class AuthController extends Controller
         $credentials = $request->validate([
             'email' => ['required', 'email'],
             'password' => ['required', 'string'],
+            'portal' => ['nullable', 'in:admin,user'],
         ]);
 
         $user = User::where('email', $credentials['email'])->first();
 
         if (! $user || ! Hash::check($credentials['password'], $user->password)) {
             throw ValidationException::withMessages(['email' => 'Invalid credentials.']);
+        }
+
+        $roleName = optional($user->role)->name ?: 'Cashier';
+        $adminRoles = ['Super Admin', 'Admin', 'Hospital Owner'];
+        $portal = $credentials['portal'] ?? 'admin';
+
+        if ($portal === 'admin' && ! in_array($roleName, $adminRoles, true)) {
+            throw ValidationException::withMessages(['email' => 'This account is a staff user. Please use User Login.']);
+        }
+
+        if ($portal === 'user' && in_array($roleName, $adminRoles, true)) {
+            throw ValidationException::withMessages(['email' => 'This account is an admin account. Please use Admin Login.']);
         }
 
         return [
