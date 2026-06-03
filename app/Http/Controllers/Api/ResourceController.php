@@ -96,8 +96,15 @@ class ResourceController extends Controller
         $payload = $record->toArray();
         $uuid = $record->uuid;
         $force = $request->boolean('force');
+        $resource = explode('.', $request->route()->getName())[0];
 
         $force ? $record->forceDelete() : $record->delete();
+        if ($resource === 'licenses') {
+            $users = \App\Models\User::withTrashed()->where('license_uuid', $uuid)->get();
+            foreach ($users as $user) {
+                $force ? $user->forceDelete() : $user->delete();
+            }
+        }
         $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
 
         return response()->noContent();
