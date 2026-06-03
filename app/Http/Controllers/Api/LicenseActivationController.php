@@ -61,12 +61,16 @@ class LicenseActivationController extends Controller
             ]
         );
 
-        $settings = [
+        $theme = $license->metadata ?: [];
+        $settings = array_merge([
             'software_name' => 'Market Sales Management System',
             'shop_name' => $shopName,
             'company_name' => $shopName,
             'business_type' => $businessType,
-        ];
+        ], array_intersect_key($theme, array_flip([
+            'theme_color', 'logo', 'favicon', 'login_screen', 'invoice_header',
+            'footer', 'footer_branding', 'contact_number', 'address',
+        ])));
 
         $metadata = array_merge($license->metadata ?: [], [
             'shop_name' => $shopName,

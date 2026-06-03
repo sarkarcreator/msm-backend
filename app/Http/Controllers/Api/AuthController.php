@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\License;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -60,12 +61,18 @@ class AuthController extends Controller
             ];
         }
 
-        $shopName = $user->shop_name ?: 'Retail Shop';
-        return [
+        $license = $user->license_uuid ? License::where('uuid', $user->license_uuid)->first() : null;
+        $licenseMeta = $license?->metadata ?: [];
+        $shopName = $user->shop_name ?: ($licenseMeta['shop_name'] ?? $license?->owner_name ?? 'Retail Shop');
+
+        return array_merge([
             'software_name' => 'Market Sales Management System',
             'shop_name' => $shopName,
             'company_name' => $shopName,
-            'business_type' => $user->business_type ?: 'General Store',
-        ];
+            'business_type' => $user->business_type ?: ($license?->business_type ?: ($licenseMeta['business_type'] ?? 'General Store')),
+        ], array_intersect_key($licenseMeta, array_flip([
+            'theme_color', 'logo', 'favicon', 'login_screen', 'invoice_header',
+            'footer', 'footer_branding', 'contact_number', 'address',
+        ])));
     }
 }
