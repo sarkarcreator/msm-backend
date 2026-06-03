@@ -170,6 +170,7 @@ class ResourceController extends Controller
             'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications', 'master-catalogs'],
             'Compounder' => ['patients', 'notifications', 'master-catalogs'],
             'Assistant' => ['patients', 'notifications', 'master-catalogs'],
+            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs'],
             default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
         };
 
