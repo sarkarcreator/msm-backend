@@ -37,6 +37,13 @@ class ResourceController extends Controller
         'mobile-wallet-transactions' => \App\Models\MobileWalletTransaction::class,
         'patients' => \App\Models\Patient::class,
         'assistants' => \App\Models\Assistant::class,
+        'hospital-prescriptions' => \App\Models\HospitalPrescription::class,
+        'hospital-orders' => \App\Models\HospitalOrder::class,
+        'hospital-tasks' => \App\Models\HospitalTask::class,
+        'lab-reports' => \App\Models\LabReport::class,
+        'radiology-reports' => \App\Models\RadiologyReport::class,
+        'hospital-bills' => \App\Models\HospitalBill::class,
+        'hospital-bill-items' => \App\Models\HospitalBillItem::class,
         'master-catalogs' => \App\Models\MasterCatalog::class,
         'licenses' => \App\Models\License::class,
         'audit-logs' => \App\Models\AuditLog::class,
@@ -51,6 +58,9 @@ class ResourceController extends Controller
 
         if ($resource === 'users' && $role === 'Super Admin') {
             $query->whereHas('role', fn ($roleQuery) => $roleQuery->where('name', 'Super Admin'));
+        }
+        if ($role !== 'Super Admin' && $request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
+            $query->where('license_uuid', $request->user()->license_uuid);
         }
 
         return $query->latest('updated_at')->paginate($request->integer('per_page', 50));
@@ -172,19 +182,30 @@ class ResourceController extends Controller
                 'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
                 'repair-updates', 'inventory-transactions', 'users', 'roles',
                 'notifications', 'manual-repair-receipts', 'mobile-wallet-transactions',
-                'patients', 'assistants', 'master-catalogs',
+                'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders',
+                'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills',
+                'hospital-bill-items', 'master-catalogs',
             ],
             'Manager' => [
                 'products', 'categories', 'brands', 'customers', 'customer-ledgers',
                 'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
                 'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
                 'repair-updates', 'inventory-transactions', 'notifications',
-                'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'assistants', 'master-catalogs',
+                'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'assistants',
+                'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports',
+                'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs',
             ],
             'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications', 'master-catalogs'],
-            'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications', 'master-catalogs'],
-            'Compounder' => ['patients', 'notifications', 'master-catalogs'],
-            'Assistant' => ['patients', 'notifications', 'master-catalogs'],
+            'Hospital Owner' => ['patients', 'assistants', 'users', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
+            'Receptionist' => ['patients', 'hospital-bills', 'notifications', 'master-catalogs'],
+            'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'master-catalogs'],
+            'Compounder' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
+            'Assistant' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
+            'Nurse' => ['patients', 'hospital-tasks', 'notifications'],
+            'Pharmacy Staff' => ['hospital-prescriptions', 'products', 'inventory-transactions', 'notifications', 'medicines'],
+            'Lab Technician' => ['lab-reports', 'hospital-tasks', 'notifications'],
+            'X-Ray Technician' => ['radiology-reports', 'hospital-tasks', 'notifications'],
+            'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'patients', 'notifications'],
             'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs'],
             default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
         };
@@ -211,6 +232,9 @@ class ResourceController extends Controller
         }
 
         if ($resource !== 'users') {
+            if ($request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
+                $payload['license_uuid'] = $request->user()->license_uuid;
+            }
             return $payload;
         }
 
@@ -259,7 +283,7 @@ class ResourceController extends Controller
         $businessType = $request->user()?->business_type ?: 'General Store';
 
         if ($businessType === 'Hospital') {
-            return ['Doctor', 'Compounder', 'Assistant', 'Manager'];
+            return ['Hospital Owner', 'Admin', 'Receptionist', 'Doctor', 'Assistant', 'Compounder', 'Nurse', 'Pharmacy Staff', 'Lab Technician', 'X-Ray Technician', 'Billing Officer', 'Manager'];
         }
 
         if ($businessType === 'Mobile Shop') {
@@ -267,5 +291,13 @@ class ResourceController extends Controller
         }
 
         return ['Manager', 'Cashier'];
+    }
+
+    private function hasLicenseColumn(string $resource): bool
+    {
+        return in_array($resource, [
+            'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks',
+            'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items',
+        ], true);
     }
 }

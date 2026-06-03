@@ -12,7 +12,7 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        foreach (['Super Admin', 'Admin', 'Manager', 'Cashier', 'Technician'] as $name) {
+        foreach (['Super Admin', 'Admin', 'Manager', 'Cashier', 'Technician', 'Hospital Owner', 'Receptionist', 'Doctor', 'Compounder', 'Assistant', 'Nurse', 'Pharmacy Staff', 'Lab Technician', 'X-Ray Technician', 'Billing Officer'] as $name) {
             Role::firstOrCreate(['name' => $name], ['uuid' => Str::uuid()]);
         }
 
