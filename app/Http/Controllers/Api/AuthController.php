@@ -44,6 +44,17 @@ class AuthController extends Controller
 
     private function settingsFor(User $user): array
     {
+        $role = optional($user->role)->name;
+
+        if ($role === 'Super Admin') {
+            return [
+                'software_name' => 'DSH License Control',
+                'shop_name' => 'DSH Digital Solutions Hub',
+                'company_name' => 'DSH Digital Solutions Hub',
+                'business_type' => 'General Store',
+            ];
+        }
+
         $shopName = $user->shop_name ?: 'Retail Shop';
         return [
             'software_name' => 'Market Sales Management System',
