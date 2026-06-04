@@ -33,10 +33,12 @@ class MobileShopSaleRequest extends FormRequest
             'cart.*.imei' => ['nullable', 'string', 'max:80'],
             'cart.*.imei_1' => ['nullable', 'string', 'max:80'],
             'cart.*.imei_2' => ['nullable', 'string', 'max:80'],
+            'cart.*.imei_numbers' => ['nullable'],
             'cart.*.serial_number' => ['nullable', 'string', 'max:120'],
             'items.*.product_uuid' => ['required_with:items', 'string', 'max:80'],
             'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
             'items.*.price' => ['nullable', 'numeric', 'min:0'],
+            'items.*.imei_numbers' => ['nullable'],
         ];
     }
 }

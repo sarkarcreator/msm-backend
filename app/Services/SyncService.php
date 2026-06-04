@@ -103,7 +103,8 @@ class SyncService
                     return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
                 }
 
-                if ($record && $record->updated_at && $record->updated_at->gt($operation['client_updated_at'])) {
+                $clientUpdatedAt = $operation['client_updated_at'] ?? null;
+                if ($record && $clientUpdatedAt && $record->updated_at && $record->updated_at->gt($clientUpdatedAt)) {
                     $this->logConflict($operation, $deviceId, $data, $actor, 'updated_at_conflict');
                     return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'server' => $record];
                 }

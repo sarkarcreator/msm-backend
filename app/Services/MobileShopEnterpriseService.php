@@ -65,7 +65,7 @@ class MobileShopEnterpriseService
                 $price = (float) ($item['price'] ?? $product->sale_price ?? 0);
                 $subtotal += $quantity * $price;
                 $profit += ($price - (float) ($product->purchase_price ?? 0)) * $quantity;
-                $saleItems[] = compact('product', 'imei', 'quantity', 'price');
+                $saleItems[] = compact('product', 'imei', 'quantity', 'price', 'item');
             }
 
             $discount = (float) ($payload['discount'] ?? 0);
@@ -109,6 +109,7 @@ class MobileShopEnterpriseService
                 /** @var Product $product */
                 $product = $line['product'];
                 $imei = $line['imei'];
+                $imeiNumbers = $this->imeiNumbersFromItem($line['item'] ?? [], $product);
                 $product->update([
                     'quantity' => max(0, (int) $product->quantity - $line['quantity']),
                     'revision' => ((int) ($product->revision ?? 1)) + 1,
@@ -124,6 +125,7 @@ class MobileShopEnterpriseService
                     'imei_uuid' => $imei?->uuid,
                     'imei_1' => $imei?->imei_1 ?? $product->imei_1 ?? $product->imei ?? null,
                     'imei_2' => $imei?->imei_2 ?? $product->imei_2 ?? null,
+                    'imei_numbers' => $imei?->imei_numbers ?: $imeiNumbers,
                     'serial_number' => $imei?->serial_number ?? $product->serial_number ?? null,
                     'imei' => $imei?->imei_1 ?? $product->imei ?? null,
                     'quantity' => $line['quantity'],
@@ -454,13 +456,19 @@ class MobileShopEnterpriseService
 
     private function resolveImeiForSale(array $item, Product $product, User $actor): ?ImeiRegistry
     {
-        $imeiValue = $item['imei_uuid'] ?? $item['imei_1'] ?? $item['imei'] ?? $product->imei_1 ?? $product->imei ?? null;
+        $numbers = $this->imeiNumbersFromItem($item, $product);
+        $imeiValue = $item['imei_uuid'] ?? $item['imei_1'] ?? $item['imei'] ?? ($numbers[0] ?? null) ?? $product->imei_1 ?? $product->imei ?? null;
         if (! $imeiValue) {
             return null;
         }
         $imei = $this->findImei($actor, $item['imei_uuid'] ?? null, $imeiValue);
         if (! $imei) {
-            $imei = $this->createImei($actor, $product, ['imei_1' => $imeiValue, 'imei_2' => $item['imei_2'] ?? null, 'serial_number' => $item['serial_number'] ?? $product->serial_number ?? null]);
+            $imei = $this->createImei($actor, $product, [
+                'imei_1' => $imeiValue,
+                'imei_2' => $item['imei_2'] ?? ($numbers[1] ?? null),
+                'imei_numbers' => $numbers,
+                'serial_number' => $item['serial_number'] ?? $product->serial_number ?? null,
+            ]);
         }
         if ($imei->status === 'Sold') {
             throw ValidationException::withMessages(['imei' => "IMEI {$imeiValue} is already sold."]);
@@ -470,9 +478,16 @@ class MobileShopEnterpriseService
 
     private function createImei(User $actor, Product $product, array $payload): ImeiRegistry
     {
-        foreach (['imei_1', 'imei_2'] as $field) {
-            if (! empty($payload[$field]) && ImeiRegistry::where('license_uuid', $actor->license_uuid)->where($field, $payload[$field])->exists()) {
-                throw ValidationException::withMessages([$field => "Duplicate {$field} {$payload[$field]}."]);
+        $numbers = $this->normalizeImeiNumbers($payload['imei_numbers'] ?? [$payload['imei_1'] ?? null, $payload['imei_2'] ?? null]);
+        foreach ($numbers as $number) {
+            $query = ImeiRegistry::where('license_uuid', $actor->license_uuid)->where(function ($q) use ($number) {
+                $q->where('imei_1', $number)->orWhere('imei_2', $number)->orWhere('serial_number', $number);
+                if (Schema::hasColumn('imei_registry', 'imei_numbers')) {
+                    $q->orWhereJsonContains('imei_numbers', $number);
+                }
+            });
+            if ($query->exists()) {
+                throw ValidationException::withMessages(['imei' => "Duplicate IMEI {$number}."]);
             }
         }
         return $this->createRecord(new ImeiRegistry(), [
@@ -481,8 +496,9 @@ class MobileShopEnterpriseService
             'business_type' => $actor->business_type,
             'product_uuid' => $product->uuid,
             'product_name' => $product->product_name,
-            'imei_1' => $payload['imei_1'] ?? null,
-            'imei_2' => $payload['imei_2'] ?? null,
+            'imei_1' => $payload['imei_1'] ?? ($numbers[0] ?? null),
+            'imei_2' => $payload['imei_2'] ?? ($numbers[1] ?? null),
+            'imei_numbers' => $numbers,
             'serial_number' => $payload['serial_number'] ?? null,
             'status' => 'In Stock',
         ]);
@@ -497,6 +513,9 @@ class MobileShopEnterpriseService
                 }
                 if ($value) {
                     $query->orWhere('imei_1', $value)->orWhere('imei_2', $value)->orWhere('serial_number', $value);
+                    if (Schema::hasColumn('imei_registry', 'imei_numbers')) {
+                        $query->orWhereJsonContains('imei_numbers', $value);
+                    }
                 }
             })
             ->lockForUpdate()
@@ -505,18 +524,60 @@ class MobileShopEnterpriseService
 
     private function imeiRowsFromItem(array $item): array
     {
-        $rows = $item['imeis'] ?? null;
+        $rows = $item['imeis'] ?? $item['imei_numbers'] ?? null;
         if (is_string($rows)) {
             $rows = collect(preg_split('/\r?\n/', $rows))->map(fn ($line) => ['imei_1' => trim($line)])->filter(fn ($line) => $line['imei_1'])->values()->all();
         }
         if (is_array($rows)) {
-            return $rows;
+            if (array_is_list($rows) && collect($rows)->every(fn ($row) => is_string($row) || is_numeric($row))) {
+                return collect($rows)->map(fn ($value) => ['imei_1' => trim((string) $value)])->filter(fn ($row) => $row['imei_1'])->values()->all();
+            }
+            return collect($rows)->map(function ($row) {
+                $numbers = $this->normalizeImeiNumbers($row['imei_numbers'] ?? null);
+                return array_merge($row, [
+                    'imei_1' => $row['imei_1'] ?? ($numbers[0] ?? null),
+                    'imei_2' => $row['imei_2'] ?? ($numbers[1] ?? null),
+                    'imei_numbers' => $numbers,
+                ]);
+            })->values()->all();
         }
+        $numbers = $this->imeiNumbersFromItem($item, null);
         return array_filter([[
-            'imei_1' => $item['imei_1'] ?? $item['imei'] ?? null,
-            'imei_2' => $item['imei_2'] ?? null,
+            'imei_1' => $item['imei_1'] ?? $item['imei'] ?? ($numbers[0] ?? null),
+            'imei_2' => $item['imei_2'] ?? ($numbers[1] ?? null),
+            'imei_numbers' => $numbers,
             'serial_number' => $item['serial_number'] ?? null,
-        ]], fn ($row) => $row['imei_1'] || $row['imei_2'] || $row['serial_number']);
+        ]], fn ($row) => $row['imei_1'] || $row['imei_2'] || $row['serial_number'] || $row['imei_numbers']);
+    }
+
+    private function imeiNumbersFromItem(array $item, ?Product $product): array
+    {
+        return $this->normalizeImeiNumbers(
+            $item['imei_numbers'] ?? $item['imeis'] ?? $item['imei'] ?? $item['imei_1']
+            ?? $product?->imei_numbers ?? $product?->imei ?? $product?->imei_1 ?? null
+        );
+    }
+
+    private function normalizeImeiNumbers($value): array
+    {
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                $value = $decoded;
+            } else {
+                $value = preg_split('/[\r\n,]+/', $value);
+            }
+        }
+        if (! is_array($value)) {
+            $value = $value ? [$value] : [];
+        }
+        return collect($value)
+            ->map(fn ($item) => is_array($item) ? ($item['imei_1'] ?? $item['imei'] ?? '') : $item)
+            ->map(fn ($item) => trim((string) $item))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function moveImei(User $actor, ImeiRegistry $imei, string $type, string $reference, string $toStatus, array $extra = []): ImeiMovement
@@ -631,7 +692,7 @@ class MobileShopEnterpriseService
     private function queueMany(User $actor, array $rows): void
     {
         foreach ($rows as [$entity, $action, $model]) {
-            SyncQueue::create([
+            $payload = [
                 'uuid' => $model->uuid,
                 'device_id' => 'server',
                 'entity' => $entity,
@@ -643,7 +704,11 @@ class MobileShopEnterpriseService
                 'revision' => $model->revision ?? 1,
                 'is_tombstone' => false,
                 'synced_at' => now(),
-            ]);
+            ];
+            if (Schema::hasTable('sync_queue')) {
+                $payload = array_intersect_key($payload, array_flip(Schema::getColumnListing('sync_queue')));
+            }
+            SyncQueue::create($payload);
         }
     }
 

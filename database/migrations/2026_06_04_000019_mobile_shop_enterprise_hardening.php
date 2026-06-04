@@ -45,6 +45,9 @@ return new class extends Migration {
                     $table->string($column)->nullable()->index();
                 }
             }
+            if (! Schema::hasColumn('products', 'imei_numbers')) {
+                $table->json('imei_numbers')->nullable();
+            }
         });
     }
 
@@ -61,6 +64,9 @@ return new class extends Migration {
                             ? $table->uuid($column)->nullable()->index()
                             : $table->string($column)->nullable()->index();
                     }
+                }
+                if (! Schema::hasColumn($tableName, 'imei_numbers')) {
+                    $table->json('imei_numbers')->nullable();
                 }
             });
         }
@@ -80,6 +86,7 @@ return new class extends Migration {
             $table->string('product_name')->nullable()->index();
             $table->string('imei_1')->nullable();
             $table->string('imei_2')->nullable();
+            $table->json('imei_numbers')->nullable();
             $table->string('serial_number')->nullable();
             $table->string('customer_name')->nullable()->index();
             $table->string('invoice_number')->nullable()->index();

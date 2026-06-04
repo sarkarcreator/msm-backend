@@ -14,6 +14,7 @@ abstract class BaseModel extends Model
     protected $casts = [
         'metadata' => 'array',
         'payload' => 'array',
+        'imei_numbers' => 'array',
         'sold_at' => 'datetime',
         'purchased_at' => 'datetime',
         'spent_at' => 'datetime',
