@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\HospitalWorkflowController;
 use App\Http\Controllers\Api\LicenseActivationController;
 use App\Http\Controllers\Api\MedicineController;
+use App\Http\Controllers\Api\MobileShopEnterpriseController;
 use App\Http\Controllers\Api\ResourceController;
 use App\Http\Controllers\Api\SyncController;
 use Illuminate\Support\Facades\Route;
@@ -28,6 +29,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/hospital/lab-reports/{report}/review', [HospitalWorkflowController::class, 'reviewLabReport'])->middleware('throttle:120,1');
     Route::post('/hospital/radiology-reports/{report}/complete', [HospitalWorkflowController::class, 'completeRadiologyReport'])->middleware('throttle:120,1');
     Route::post('/hospital/radiology-reports/{report}/review', [HospitalWorkflowController::class, 'reviewRadiologyReport'])->middleware('throttle:120,1');
+    Route::post('/mobile-shop/sales', [MobileShopEnterpriseController::class, 'sale'])->middleware('throttle:120,1');
+    Route::post('/mobile-shop/purchases', [MobileShopEnterpriseController::class, 'purchase'])->middleware('throttle:120,1');
+    Route::get('/mobile-shop/imeis/search', [MobileShopEnterpriseController::class, 'searchImei'])->middleware('throttle:120,1');
+    Route::post('/mobile-shop/warranty-claims', [MobileShopEnterpriseController::class, 'warrantyClaim'])->middleware('throttle:60,1');
+    Route::post('/mobile-shop/sale-returns', [MobileShopEnterpriseController::class, 'saleReturn'])->middleware('throttle:60,1');
+    Route::post('/mobile-shop/purchase-returns', [MobileShopEnterpriseController::class, 'purchaseReturn'])->middleware('throttle:60,1');
+    Route::get('/mobile-shop/reports/{type}', [MobileShopEnterpriseController::class, 'report'])->middleware('throttle:120,1');
     Route::get('/medicines/search', [MedicineController::class, 'search'])->middleware('throttle:120,1');
     Route::post('/medicines/import', [MedicineController::class, 'import'])->middleware('throttle:10,1');
     Route::get('/medicine-categories', [MedicineController::class, 'categories']);
@@ -43,7 +51,8 @@ Route::middleware('auth:sanctum')->group(function () {
         'mobile-wallet-transactions', 'patients', 'assistants', 'hospital-prescriptions',
         'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports',
         'hospital-bills', 'hospital-bill-items', 'master-catalogs', 'licenses',
-        'audit-logs'
+        'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
+        'sale-return-items', 'purchase-returns', 'purchase-return-items', 'audit-logs'
     ] as $resource) {
         Route::apiResource($resource, ResourceController::class)->parameters([$resource => 'id']);
     }

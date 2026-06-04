@@ -45,6 +45,13 @@ class SyncService
         'hospital_bill_items' => \App\Models\HospitalBillItem::class,
         'master_catalogs' => \App\Models\MasterCatalog::class,
         'medicines' => \App\Models\Medicine::class,
+        'imei_registry' => \App\Models\ImeiRegistry::class,
+        'imei_movements' => \App\Models\ImeiMovement::class,
+        'warranty_claims' => \App\Models\WarrantyClaim::class,
+        'sale_returns' => \App\Models\SaleReturn::class,
+        'sale_return_items' => \App\Models\SaleReturnItem::class,
+        'purchase_returns' => \App\Models\PurchaseReturn::class,
+        'purchase_return_items' => \App\Models\PurchaseReturnItem::class,
         'licenses' => \App\Models\License::class,
         'audit_logs' => \App\Models\AuditLog::class,
         'inventory_transactions' => \App\Models\InventoryTransaction::class,
@@ -58,6 +65,8 @@ class SyncService
         'mobile_wallet_transactions', 'patients', 'assistants', 'hospital_prescriptions',
         'hospital_orders', 'hospital_tasks', 'lab_reports', 'radiology_reports',
         'hospital_bills', 'hospital_bill_items', 'master_catalogs',
+        'imei_registry', 'imei_movements', 'warranty_claims', 'sale_returns',
+        'sale_return_items', 'purchase_returns', 'purchase_return_items',
     ];
 
     public function apply(string $deviceId, array $operations, ?User $actor = null): array

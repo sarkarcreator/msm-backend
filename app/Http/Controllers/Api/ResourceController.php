@@ -20,6 +20,8 @@ class ResourceController extends Controller
         'mobile-wallet-transactions', 'patients', 'assistants', 'hospital-prescriptions',
         'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports',
         'hospital-bills', 'hospital-bill-items', 'master-catalogs',
+        'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
+        'sale-return-items', 'purchase-returns', 'purchase-return-items',
     ];
 
     private array $hospitalOnlyResources = [
@@ -28,6 +30,11 @@ class ResourceController extends Controller
     ];
 
     private array $repairOnlyResources = ['repairs', 'repair-updates', 'manual-repair-receipts'];
+
+    private array $mobileShopOnlyResources = [
+        'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
+        'sale-return-items', 'purchase-returns', 'purchase-return-items',
+    ];
 
     private array $models = [
         'products' => \App\Models\Product::class,
@@ -64,6 +71,13 @@ class ResourceController extends Controller
         'hospital-bills' => \App\Models\HospitalBill::class,
         'hospital-bill-items' => \App\Models\HospitalBillItem::class,
         'master-catalogs' => \App\Models\MasterCatalog::class,
+        'imei-registry' => \App\Models\ImeiRegistry::class,
+        'imei-movements' => \App\Models\ImeiMovement::class,
+        'warranty-claims' => \App\Models\WarrantyClaim::class,
+        'sale-returns' => \App\Models\SaleReturn::class,
+        'sale-return-items' => \App\Models\SaleReturnItem::class,
+        'purchase-returns' => \App\Models\PurchaseReturn::class,
+        'purchase-return-items' => \App\Models\PurchaseReturnItem::class,
         'licenses' => \App\Models\License::class,
         'audit-logs' => \App\Models\AuditLog::class,
     ];
@@ -244,7 +258,9 @@ class ResourceController extends Controller
                 'notifications', 'manual-repair-receipts', 'mobile-wallet-transactions',
                 'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders',
                 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills',
-                'hospital-bill-items', 'master-catalogs',
+                'hospital-bill-items', 'master-catalogs', 'imei-registry',
+                'imei-movements', 'warranty-claims', 'sale-returns', 'sale-return-items',
+                'purchase-returns', 'purchase-return-items',
             ],
             'Manager' => [
                 'products', 'categories', 'brands', 'customers', 'customer-ledgers',
@@ -254,6 +270,8 @@ class ResourceController extends Controller
                 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'assistants',
                 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports',
                 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs',
+                'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
+                'sale-return-items', 'purchase-returns', 'purchase-return-items',
             ],
             'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications', 'master-catalogs'],
             'Hospital Owner' => ['patients', 'assistants', 'users', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
@@ -266,7 +284,7 @@ class ResourceController extends Controller
             'Lab Technician' => ['lab-reports', 'hospital-tasks', 'notifications'],
             'X-Ray Technician' => ['radiology-reports', 'hospital-tasks', 'notifications'],
             'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'patients', 'notifications'],
-            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs'],
+            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs', 'imei-registry', 'warranty-claims', 'sale-returns', 'sale-return-items'],
             default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
         };
 
@@ -280,6 +298,10 @@ class ResourceController extends Controller
 
             if (! in_array($businessType, ['Mobile Shop', 'Electronics Store'], true)) {
                 abort_if(in_array($resource, $this->repairOnlyResources, true), 403, 'This module is only available for repair-enabled licenses.');
+            }
+
+            if ($businessType !== 'Mobile Shop') {
+                abort_if(in_array($resource, $this->mobileShopOnlyResources, true), 403, 'This module is only available for mobile shop licenses.');
             }
         }
     }
