@@ -200,6 +200,8 @@ class ResourceController extends Controller
 
         \App\Models\AuditLog::create([
             'uuid' => (string) Str::uuid(),
+            'license_uuid' => $payload['license_uuid'] ?? $request->user()?->license_uuid,
+            'business_type' => $payload['business_type'] ?? $request->user()?->business_type,
             'user_name' => optional($request->user())->name ?: 'API User',
             'action' => $action,
             'entity' => $resource,

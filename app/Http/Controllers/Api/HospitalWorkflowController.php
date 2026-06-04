@@ -7,6 +7,7 @@ use App\Models\HospitalBill;
 use App\Models\HospitalPrescription;
 use App\Models\LabReport;
 use App\Models\Patient;
+use App\Models\RadiologyReport;
 use App\Services\HospitalWorkflowService;
 use Illuminate\Http\Request;
 
@@ -74,6 +75,19 @@ class HospitalWorkflowController extends Controller
         return $workflow->recalculateBill($record, $request->user(), $payload['paid'] ?? null);
     }
 
+    public function saveBillPayment(Request $request, string $bill, HospitalWorkflowService $workflow)
+    {
+        $payload = $request->validate([
+            'paid' => ['nullable', 'numeric', 'min:0'],
+            'paid_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_method' => ['nullable', 'string', 'max:80'],
+        ]);
+
+        $record = HospitalBill::where('uuid', $bill)->orWhere('id', $bill)->firstOrFail();
+
+        return $workflow->saveBillPayment($record, $request->user(), $payload);
+    }
+
     public function completePrescription(Request $request, string $prescription, HospitalWorkflowService $workflow)
     {
         $record = HospitalPrescription::where('uuid', $prescription)->orWhere('id', $prescription)->firstOrFail();
@@ -83,8 +97,49 @@ class HospitalWorkflowController extends Controller
 
     public function completeLabReport(Request $request, string $report, HospitalWorkflowService $workflow)
     {
+        $payload = $request->validate([
+            'result' => ['nullable', 'string'],
+            'remarks' => ['nullable', 'string'],
+            'technician_name' => ['nullable', 'string', 'max:255'],
+            'attachment_url' => ['nullable', 'string', 'max:2048'],
+            'file_url' => ['nullable', 'string', 'max:2048'],
+        ]);
         $record = LabReport::where('uuid', $report)->orWhere('id', $report)->firstOrFail();
 
-        return $workflow->completeLabReport($record, $request->user());
+        return $workflow->completeLabReport($record, $request->user(), $payload);
+    }
+
+    public function completeRadiologyReport(Request $request, string $report, HospitalWorkflowService $workflow)
+    {
+        $payload = $request->validate([
+            'report' => ['nullable', 'string'],
+            'report_text' => ['nullable', 'string'],
+            'findings' => ['nullable', 'string'],
+            'impression' => ['nullable', 'string'],
+            'radiologist_name' => ['nullable', 'string', 'max:255'],
+            'attachment_url' => ['nullable', 'string', 'max:2048'],
+            'report_url' => ['nullable', 'string', 'max:2048'],
+        ]);
+        $record = RadiologyReport::where('uuid', $report)->orWhere('id', $report)->firstOrFail();
+
+        return $workflow->completeRadiologyReport($record, $request->user(), $payload);
+    }
+
+    public function reviewLabReport(Request $request, string $report, HospitalWorkflowService $workflow)
+    {
+        $payload = $request->validate([
+            'doctor_review_status' => ['required', 'string', 'in:Reviewed,Need Repeat,Need Follow Up'],
+        ]);
+
+        return $workflow->reviewReport('lab', $report, $request->user(), $payload['doctor_review_status']);
+    }
+
+    public function reviewRadiologyReport(Request $request, string $report, HospitalWorkflowService $workflow)
+    {
+        $payload = $request->validate([
+            'doctor_review_status' => ['required', 'string', 'in:Reviewed,Need Repeat,Need Follow Up'],
+        ]);
+
+        return $workflow->reviewReport('radiology', $report, $request->user(), $payload['doctor_review_status']);
     }
 }

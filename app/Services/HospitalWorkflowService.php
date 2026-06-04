@@ -8,9 +8,11 @@ use App\Models\HospitalOrder;
 use App\Models\HospitalPrescription;
 use App\Models\HospitalTask;
 use App\Models\LabReport;
+use App\Models\Notification;
 use App\Models\Patient;
 use App\Models\Product;
 use App\Models\RadiologyReport;
+use App\Models\AuditLog;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -126,12 +128,73 @@ class HospitalWorkflowService
 
             $bill->update(array_merge($totals, [
                 'paid' => $paidAmount,
+                'paid_amount' => $paidAmount,
                 'balance' => max(0, $totals['grand_total'] - $paidAmount),
                 'status' => max(0, $totals['grand_total'] - $paidAmount) <= 0 ? 'Paid' : 'Pending',
                 'revision' => ((int) ($bill->revision ?? 1)) + 1,
             ]));
 
             return $bill->fresh();
+        }, 3);
+    }
+
+    public function saveBillPayment(HospitalBill $bill, User $actor, array $payload): array
+    {
+        $this->assertHospitalTenant($actor);
+        $this->assertTenantRecord($bill, $actor);
+
+        return DB::transaction(function () use ($bill, $actor, $payload) {
+            $bill = HospitalBill::where('uuid', $bill->uuid)->lockForUpdate()->firstOrFail();
+            $lines = HospitalBillItem::where('bill_uuid', $bill->uuid)->lockForUpdate()->get();
+            $totals = $this->totals($lines->map(fn ($line) => [
+                'item_type' => $line->item_type,
+                'amount' => (float) $line->amount,
+            ])->all());
+            $paidAmount = min(max(0, (float) ($payload['paid_amount'] ?? $payload['paid'] ?? $totals['grand_total'])), $totals['grand_total']);
+            $balance = max(0, $totals['grand_total'] - $paidAmount);
+            $now = now();
+
+            $bill->update(array_merge($totals, [
+                'paid' => $paidAmount,
+                'paid_amount' => $paidAmount,
+                'payment_method' => $payload['payment_method'] ?? 'Cash',
+                'received_by' => $actor->name,
+                'received_at' => $now,
+                'completion_time' => $balance <= 0 ? $now : null,
+                'balance' => $balance,
+                'status' => $balance <= 0 ? 'Paid' : 'Pending',
+                'revision' => ((int) ($bill->revision ?? 1)) + 1,
+            ]));
+
+            $patient = Patient::where('license_uuid', $actor->license_uuid)
+                ->where('uuid', $bill->patient_uuid)
+                ->lockForUpdate()
+                ->first();
+
+            if ($patient && $balance <= 0) {
+                $patient->update([
+                    'status' => 'Closed',
+                    'revision' => ((int) ($patient->revision ?? 1)) + 1,
+                ]);
+                $this->notify($actor, 'Patient fully treated. Payment received.', $patient, [
+                    'token_number' => $patient->token_number,
+                    'patient_name' => $patient->patient_name,
+                    'doctor_name' => $patient->doctor_name,
+                    'grand_total' => $totals['grand_total'],
+                    'paid_amount' => $paidAmount,
+                    'payment_method' => $payload['payment_method'] ?? 'Cash',
+                    'completion_time' => $now->toISOString(),
+                ]);
+                $this->audit($actor, 'case_closed', 'patients', $patient->uuid, $patient->fresh()->toArray());
+            }
+
+            $this->audit($actor, 'bill_paid', 'hospital_bills', $bill->uuid, $bill->fresh()->toArray());
+
+            return [
+                'bill' => $bill->fresh(),
+                'patient' => $patient?->fresh(),
+                'notifications' => Notification::where('license_uuid', $actor->license_uuid)->latest('updated_at')->limit(10)->get(),
+            ];
         }, 3);
     }
 
@@ -165,6 +228,7 @@ class HospitalWorkflowService
                 'status' => 'Completed',
                 'dispensed_at' => now(),
                 'dispensed_by' => $actor->name,
+                'dispensed_quantity' => max(1, (int) $prescription->days),
                 'revision' => ((int) ($prescription->revision ?? 1)) + 1,
             ]);
 
@@ -176,11 +240,13 @@ class HospitalWorkflowService
                 $this->recalculateBill($bill, $actor);
             }
 
+            $this->audit($actor, 'medicine_dispensed', 'hospital_prescriptions', $prescription->uuid, $prescription->fresh()->toArray());
+
             return $prescription->fresh();
         }, 3);
     }
 
-    public function completeLabReport(LabReport $report, User $actor): LabReport
+    public function completeLabReport(LabReport $report, User $actor, array $payload = []): LabReport
     {
         $this->assertHospitalTenant($actor);
         $this->assertTenantRecord($report, $actor);
@@ -188,8 +254,60 @@ class HospitalWorkflowService
         $report->update([
             'status' => 'Completed',
             'doctor_review_status' => 'Pending Review',
+            'result' => $payload['result'] ?? $report->result,
+            'remarks' => $payload['remarks'] ?? $report->remarks,
+            'technician_name' => $payload['technician_name'] ?? $actor->name,
+            'attachment_url' => $payload['attachment_url'] ?? $payload['file_url'] ?? $report->attachment_url ?? $report->file_url,
+            'completed_at' => now(),
             'revision' => ((int) ($report->revision ?? 1)) + 1,
         ]);
+
+        $this->audit($actor, 'lab_completed', 'lab_reports', $report->uuid, $report->fresh()->toArray());
+
+        return $report->fresh();
+    }
+
+    public function completeRadiologyReport(RadiologyReport $report, User $actor, array $payload = []): RadiologyReport
+    {
+        $this->assertHospitalTenant($actor);
+        $this->assertTenantRecord($report, $actor);
+
+        $report->update([
+            'status' => 'Completed',
+            'doctor_review_status' => 'Pending Review',
+            'report_text' => $payload['report_text'] ?? $payload['report'] ?? $report->report_text ?? $report->report,
+            'findings' => $payload['findings'] ?? $report->findings,
+            'impression' => $payload['impression'] ?? $report->impression,
+            'radiologist_name' => $payload['radiologist_name'] ?? $actor->name,
+            'attachment_url' => $payload['attachment_url'] ?? $payload['report_url'] ?? $report->attachment_url ?? $report->report_url,
+            'completed_at' => now(),
+            'revision' => ((int) ($report->revision ?? 1)) + 1,
+        ]);
+
+        $this->audit($actor, 'radiology_completed', 'radiology_reports', $report->uuid, $report->fresh()->toArray());
+
+        return $report->fresh();
+    }
+
+    public function reviewReport(string $type, string $uuid, User $actor, string $status): LabReport|RadiologyReport
+    {
+        $this->assertHospitalTenant($actor);
+
+        if (! in_array($status, ['Reviewed', 'Need Repeat', 'Need Follow Up'], true)) {
+            throw ValidationException::withMessages(['doctor_review_status' => 'Invalid review status.']);
+        }
+
+        $model = $type === 'radiology' ? RadiologyReport::class : LabReport::class;
+        $report = $model::where('uuid', $uuid)->orWhere('id', $uuid)->firstOrFail();
+        $this->assertTenantRecord($report, $actor);
+
+        $report->update([
+            'doctor_review_status' => $status,
+            'status' => $status === 'Reviewed' ? 'Reviewed' : $report->status,
+            'revision' => ((int) ($report->revision ?? 1)) + 1,
+        ]);
+
+        $this->audit($actor, "{$type}_reviewed", $type === 'radiology' ? 'radiology_reports' : 'lab_reports', $report->uuid, $report->fresh()->toArray());
 
         return $report->fresh();
     }
@@ -501,5 +619,34 @@ class HospitalWorkflowService
         if (($record->license_uuid ?? null) !== $actor->license_uuid) {
             throw ValidationException::withMessages(['license_uuid' => 'This record does not belong to the active tenant.']);
         }
+    }
+
+    private function notify(User $actor, string $message, Patient $patient, array $metadata): void
+    {
+        Notification::create([
+            'uuid' => (string) Str::uuid(),
+            'license_uuid' => $actor->license_uuid,
+            'business_type' => $actor->business_type,
+            'title' => 'Patient Completed',
+            'message' => $message,
+            'type' => 'Hospital',
+            'status' => 'Active',
+            'metadata' => $metadata,
+        ]);
+    }
+
+    private function audit(User $actor, string $action, string $entity, string $uuid, array $payload): void
+    {
+        AuditLog::create([
+            'uuid' => (string) Str::uuid(),
+            'license_uuid' => $actor->license_uuid,
+            'business_type' => $actor->business_type,
+            'user_name' => $actor->name,
+            'action' => $action,
+            'entity' => $entity,
+            'entity_uuid' => $uuid,
+            'details' => "{$action} {$entity}",
+            'metadata' => $payload,
+        ]);
     }
 }

@@ -22,8 +22,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/hospital/workflows', [HospitalWorkflowController::class, 'store'])->middleware('throttle:60,1');
     Route::patch('/hospital/patients/{patient}/status', [HospitalWorkflowController::class, 'transitionPatient'])->middleware('throttle:120,1');
     Route::post('/hospital/bills/{bill}/recalculate', [HospitalWorkflowController::class, 'recalculateBill'])->middleware('throttle:120,1');
+    Route::post('/hospital/bills/{bill}/payment', [HospitalWorkflowController::class, 'saveBillPayment'])->middleware('throttle:120,1');
     Route::post('/hospital/prescriptions/{prescription}/complete', [HospitalWorkflowController::class, 'completePrescription'])->middleware('throttle:120,1');
     Route::post('/hospital/lab-reports/{report}/complete', [HospitalWorkflowController::class, 'completeLabReport'])->middleware('throttle:120,1');
+    Route::post('/hospital/lab-reports/{report}/review', [HospitalWorkflowController::class, 'reviewLabReport'])->middleware('throttle:120,1');
+    Route::post('/hospital/radiology-reports/{report}/complete', [HospitalWorkflowController::class, 'completeRadiologyReport'])->middleware('throttle:120,1');
+    Route::post('/hospital/radiology-reports/{report}/review', [HospitalWorkflowController::class, 'reviewRadiologyReport'])->middleware('throttle:120,1');
     Route::get('/medicines/search', [MedicineController::class, 'search'])->middleware('throttle:120,1');
     Route::post('/medicines/import', [MedicineController::class, 'import'])->middleware('throttle:10,1');
     Route::get('/medicine-categories', [MedicineController::class, 'categories']);
