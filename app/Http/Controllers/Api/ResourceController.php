@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Role;
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -144,22 +147,165 @@ class ResourceController extends Controller
         $force = $request->boolean('force');
         $resource = explode('.', $request->route()->getName())[0];
 
-        $force ? $record->forceDelete() : $record->delete();
-        if ($resource === 'licenses') {
-            $users = \App\Models\User::withTrashed()->where('license_uuid', $uuid)->get();
-            foreach ($users as $user) {
-                $userPayload = $user->toArray();
-                $force ? $user->forceDelete() : $user->delete();
-                $this->queueTombstone($request, 'users', $user->uuid, $userPayload, $force);
-            }
+        try {
+            DB::transaction(function () use ($request, $record, $resource, $uuid, $payload, $force) {
+                if ($force) {
+                    $this->deleteBlockingRelations($request, $resource, $record, $force);
+                }
+
+                $force ? $record->forceDelete() : $record->delete();
+                if ($resource === 'licenses') {
+                    $users = \App\Models\User::withTrashed()->where('license_uuid', $uuid)->get();
+                    foreach ($users as $user) {
+                        $userPayload = $user->toArray();
+                        $force ? $user->forceDelete() : $user->delete();
+                        $this->queueTombstone($request, 'users', $user->uuid, $userPayload, $force);
+                    }
+                }
+                if ($resource === 'patients') {
+                    $this->deletePatientWorkflow($request, $uuid, $force);
+                }
+                $this->queueTombstone($request, $resource, $uuid, $payload, $force);
+                $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
+            });
+        } catch (QueryException $exception) {
+            Log::error('Resource delete failed', [
+                'resource' => $resource,
+                'uuid' => $uuid,
+                'force' => $force,
+                'error' => $exception->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'delete' => 'Record cannot be deleted because linked records still exist.',
+            ]);
         }
-        if ($resource === 'patients') {
-            $this->deletePatientWorkflow($request, $uuid, $force);
-        }
-        $this->queueTombstone($request, $resource, $uuid, $payload, $force);
-        $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
 
         return response()->noContent();
+    }
+
+    private function deleteBlockingRelations(Request $request, string $resource, $record, bool $force): void
+    {
+        if ($resource === 'sales') {
+            $this->deleteRows($request, 'sale-items', \App\Models\SaleItem::class, [
+                'sale_id' => $record->id,
+                'sale_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'sale-returns', \App\Models\SaleReturn::class, [
+                'sale_id' => $record->id,
+                'sale_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'imei-movements', \App\Models\ImeiMovement::class, [
+                'sale_id' => $record->id,
+                'sale_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'warranty-claims', \App\Models\WarrantyClaim::class, [
+                'sale_id' => $record->id,
+                'sale_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteLegacyTableRows('credits', [
+                'sale_id' => $record->id,
+                'sale_uuid' => $record->uuid,
+            ]);
+        }
+
+        if ($resource === 'products') {
+            $this->deleteRows($request, 'sale-return-items', \App\Models\SaleReturnItem::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'purchase-return-items', \App\Models\PurchaseReturnItem::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'sale-items', \App\Models\SaleItem::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'purchase-items', \App\Models\PurchaseItem::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'inventory-transactions', \App\Models\InventoryTransaction::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'imei-registry', \App\Models\ImeiRegistry::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'imei-movements', \App\Models\ImeiMovement::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'warranty-claims', \App\Models\WarrantyClaim::class, [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteLegacyTableRows('imei_numbers', [
+                'product_id' => $record->id,
+                'product_uuid' => $record->uuid,
+            ]);
+        }
+    }
+
+    private function deleteRows(Request $request, string $resource, string $model, array $matches, bool $force): void
+    {
+        $instance = app($model);
+        $table = $instance->getTable();
+        if (! Schema::hasTable($table)) {
+            return;
+        }
+        if (! $this->hasAnyMatchColumn($table, $matches)) {
+            return;
+        }
+
+        $query = $model::withTrashed()->where(function ($where) use ($table, $matches) {
+            foreach ($matches as $column => $value) {
+                if ($value !== null && Schema::hasColumn($table, $column)) {
+                    $where->orWhere($column, $value);
+                }
+            }
+        });
+
+        foreach ($query->get() as $row) {
+            $payload = $row->toArray();
+            $force ? $row->forceDelete() : $row->delete();
+            if (! empty($row->uuid)) {
+                $this->queueTombstone($request, $resource, $row->uuid, $payload, $force);
+            }
+        }
+    }
+
+    private function deleteLegacyTableRows(string $table, array $matches): void
+    {
+        if (! Schema::hasTable($table)) {
+            return;
+        }
+        if (! $this->hasAnyMatchColumn($table, $matches)) {
+            return;
+        }
+
+        $query = DB::table($table)->where(function ($where) use ($table, $matches) {
+            foreach ($matches as $column => $value) {
+                if ($value !== null && Schema::hasColumn($table, $column)) {
+                    $where->orWhere($column, $value);
+                }
+            }
+        });
+
+        $query->delete();
+    }
+
+    private function hasAnyMatchColumn(string $table, array $matches): bool
+    {
+        foreach ($matches as $column => $value) {
+            if ($value !== null && Schema::hasColumn($table, $column)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function deletePatientWorkflow(Request $request, string $patientUuid, bool $force): void
