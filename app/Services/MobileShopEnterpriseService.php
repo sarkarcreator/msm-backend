@@ -24,7 +24,9 @@ use App\Models\SyncQueue;
 use App\Models\User;
 use App\Models\WarrantyClaim;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -86,6 +88,7 @@ class MobileShopEnterpriseService
                 'license_uuid' => $actor->license_uuid,
                 'business_type' => $actor->business_type,
                 'invoice_number' => $payload['invoice_number'] ?? $this->nextNumber(Sale::class, 'DSH-INV', $actor),
+                'customer_id' => $customer?->id,
                 'customer_uuid' => $customer?->uuid,
                 'customer_name' => $customer?->name ?? ($payload['customer_name'] ?? 'Walk-in Customer'),
                 'payment_type' => $payload['payment_type'] ?? 'cash',
@@ -119,7 +122,9 @@ class MobileShopEnterpriseService
                     'uuid' => (string) Str::uuid(),
                     'license_uuid' => $actor->license_uuid,
                     'business_type' => $actor->business_type,
+                    'sale_id' => $sale->id,
                     'sale_uuid' => $sale->uuid,
+                    'product_id' => $product->id,
                     'product_uuid' => $product->uuid,
                     'product_name' => $product->product_name,
                     'imei_uuid' => $imei?->uuid,
@@ -136,7 +141,9 @@ class MobileShopEnterpriseService
                 $this->inventory($actor, $product, 'Stock Out', -$line['quantity'], $sale->invoice_number, 'Sale');
                 if ($imei) {
                     $createdMovements[] = $this->moveImei($actor, $imei, 'Sale', $sale->invoice_number, 'Sold', [
+                        'sale_id' => $sale->id,
                         'sale_uuid' => $sale->uuid,
+                        'product_id' => $product->id,
                         'product_uuid' => $product->uuid,
                     ]);
                     $imei->update([
@@ -182,6 +189,9 @@ class MobileShopEnterpriseService
             }
 
             $supplier = $this->supplier($payload['supplier_uuid'] ?? null, $actor);
+            if ($this->hasColumn('purchases', 'supplier_id') && ! $supplier?->id) {
+                throw ValidationException::withMessages(['supplier_uuid' => 'Supplier is required by the legacy purchase schema.']);
+            }
             $productRows = Product::where('license_uuid', $actor->license_uuid)
                 ->whereIn('uuid', $items->pluck('product_uuid')->filter()->values())
                 ->lockForUpdate()
@@ -195,6 +205,7 @@ class MobileShopEnterpriseService
                 'uuid' => $payload['uuid'] ?? (string) Str::uuid(),
                 'license_uuid' => $actor->license_uuid,
                 'business_type' => $actor->business_type,
+                'supplier_id' => $supplier?->id,
                 'supplier_uuid' => $supplier?->uuid,
                 'supplier_name' => $supplier?->supplier_name ?? ($payload['supplier_name'] ?? null),
                 'invoice_number' => $payload['invoice_number'] ?? $this->nextNumber(Purchase::class, 'PUR', $actor),
@@ -225,7 +236,9 @@ class MobileShopEnterpriseService
                     'uuid' => (string) Str::uuid(),
                     'license_uuid' => $actor->license_uuid,
                     'business_type' => $actor->business_type,
+                    'purchase_id' => $purchase->id,
                     'purchase_uuid' => $purchase->uuid,
+                    'product_id' => $product->id,
                     'product_uuid' => $product->uuid,
                     'product_name' => $product->product_name,
                     'quantity' => $quantity,
@@ -238,7 +251,9 @@ class MobileShopEnterpriseService
                     $imei = $this->createImei($actor, $product, $imeiRow);
                     $createdImeis[] = $imei;
                     $createdMovements[] = $this->moveImei($actor, $imei, 'Purchase', $purchase->invoice_number, 'In Stock', [
+                        'purchase_id' => $purchase->id,
                         'purchase_uuid' => $purchase->uuid,
+                        'product_id' => $product->id,
                         'product_uuid' => $product->uuid,
                     ]);
                 }
@@ -284,7 +299,9 @@ class MobileShopEnterpriseService
                 'uuid' => (string) Str::uuid(),
                 'license_uuid' => $actor->license_uuid,
                 'business_type' => $actor->business_type,
+                'sale_id' => $sale->id,
                 'sale_uuid' => $sale->uuid,
+                'customer_id' => $sale->customer_id ?? null,
                 'customer_uuid' => $sale->customer_uuid,
                 'return_number' => $payload['return_number'] ?? $this->nextNumber(SaleReturn::class, 'SRN', $actor),
                 'invoice_number' => $sale->invoice_number,
@@ -303,16 +320,26 @@ class MobileShopEnterpriseService
                 }
                 $imei = $this->findImei($actor, $item['imei_uuid'] ?? null, $item['imei_1'] ?? $item['imei'] ?? null);
                 if ($imei) {
-                    $this->moveImei($actor, $imei, 'Return', $return->return_number, 'Returned', ['sale_uuid' => $sale->uuid]);
+                    $this->moveImei($actor, $imei, 'Return', $return->return_number, 'Returned', [
+                        'sale_id' => $sale->id,
+                        'sale_uuid' => $sale->uuid,
+                        'product_id' => $product?->id,
+                        'product_uuid' => $product?->uuid,
+                    ]);
                     $imei->update(['status' => 'Returned']);
                 }
+                $saleItem = $this->saleItem($item['sale_item_uuid'] ?? null, $actor);
                 $created[] = $this->createRecord(new SaleReturnItem(), [
                     'uuid' => (string) Str::uuid(),
                     'license_uuid' => $actor->license_uuid,
                     'business_type' => $actor->business_type,
+                    'sale_return_id' => $return->id,
                     'sale_return_uuid' => $return->uuid,
+                    'sale_item_id' => $saleItem?->id,
                     'sale_item_uuid' => $item['sale_item_uuid'] ?? null,
+                    'product_id' => $product?->id,
                     'product_uuid' => $item['product_uuid'] ?? null,
+                    'imei_id' => $imei?->id,
                     'imei_uuid' => $imei?->uuid,
                     'product_name' => $item['product_name'] ?? $product?->product_name,
                     'imei_1' => $imei?->imei_1 ?? ($item['imei_1'] ?? null),
@@ -346,7 +373,9 @@ class MobileShopEnterpriseService
                 'uuid' => (string) Str::uuid(),
                 'license_uuid' => $actor->license_uuid,
                 'business_type' => $actor->business_type,
+                'purchase_id' => $purchase->id,
                 'purchase_uuid' => $purchase->uuid,
+                'supplier_id' => $purchase->supplier_id ?? null,
                 'supplier_uuid' => $purchase->supplier_uuid,
                 'return_number' => $payload['return_number'] ?? $this->nextNumber(PurchaseReturn::class, 'PRN', $actor),
                 'invoice_number' => $purchase->invoice_number,
@@ -365,13 +394,18 @@ class MobileShopEnterpriseService
                     $product->update(['quantity' => (int) $product->quantity - $quantity]);
                     $this->inventory($actor, $product, 'Stock Out', -$quantity, $return->return_number, 'Purchase Return');
                 }
+                $purchaseItem = $this->purchaseItem($item['purchase_item_uuid'] ?? null, $actor);
                 $created[] = $this->createRecord(new PurchaseReturnItem(), [
                     'uuid' => (string) Str::uuid(),
                     'license_uuid' => $actor->license_uuid,
                     'business_type' => $actor->business_type,
+                    'purchase_return_id' => $return->id,
                     'purchase_return_uuid' => $return->uuid,
+                    'purchase_item_id' => $purchaseItem?->id,
                     'purchase_item_uuid' => $item['purchase_item_uuid'] ?? null,
+                    'product_id' => $product?->id,
                     'product_uuid' => $item['product_uuid'] ?? null,
+                    'imei_id' => null,
                     'product_name' => $item['product_name'] ?? $product?->product_name,
                     'quantity' => $quantity,
                     'amount' => (float) ($item['amount'] ?? $item['cost_price'] ?? 0),
@@ -394,19 +428,39 @@ class MobileShopEnterpriseService
         if (! isset($payload['issue']) && isset($payload['issue_description'])) {
             $payload['issue'] = $payload['issue_description'];
         }
+        $product = $payload['product_uuid'] ?? null
+            ? Product::where('license_uuid', $actor->license_uuid)->where('uuid', $payload['product_uuid'])->first()
+            : null;
+        $sale = $payload['sale_uuid'] ?? null
+            ? Sale::where('license_uuid', $actor->license_uuid)->where('uuid', $payload['sale_uuid'])->first()
+            : null;
+        $customer = $payload['customer_uuid'] ?? null
+            ? Customer::where('license_uuid', $actor->license_uuid)->where('uuid', $payload['customer_uuid'])->first()
+            : null;
+        $imei = ! empty($payload['imei_uuid'])
+            ? $this->findImei($actor, $payload['imei_uuid'], null)
+            : null;
         $claim = $this->createRecord(new WarrantyClaim(), array_merge($payload, [
             'uuid' => $payload['uuid'] ?? (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'product_id' => $product?->id,
+            'sale_id' => $sale?->id,
+            'customer_id' => $customer?->id,
+            'imei_id' => $imei?->id,
             'claim_number' => $payload['claim_number'] ?? $this->nextNumber(WarrantyClaim::class, 'WCL', $actor),
             'claim_date' => $payload['claim_date'] ?? now()->toDateString(),
             'status' => $payload['status'] ?? 'Open',
         ]));
-        if (! empty($payload['imei_uuid'])) {
-            $imei = $this->findImei($actor, $payload['imei_uuid'], null);
-            if ($imei) {
-                $this->moveImei($actor, $imei, 'Warranty Claim', $claim->uuid, $imei->status ?: 'In Stock', ['warranty_claim_uuid' => $claim->uuid]);
-            }
+        if ($imei) {
+            $this->moveImei($actor, $imei, 'Warranty Claim', $claim->uuid, $imei->status ?: 'In Stock', [
+                'warranty_claim_id' => $claim->id,
+                'warranty_claim_uuid' => $claim->uuid,
+                'product_id' => $product?->id,
+                'product_uuid' => $product?->uuid,
+                'sale_id' => $sale?->id,
+                'sale_uuid' => $sale?->uuid,
+            ]);
         }
         $this->audit($actor, 'warranty_claim_created', 'warranty_claims', $claim->uuid, $claim->toArray());
         return $claim->fresh();
@@ -494,6 +548,7 @@ class MobileShopEnterpriseService
             'uuid' => $payload['uuid'] ?? (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'product_id' => $product->id,
             'product_uuid' => $product->uuid,
             'product_name' => $product->product_name,
             'imei_1' => $payload['imei_1'] ?? ($numbers[0] ?? null),
@@ -586,8 +641,9 @@ class MobileShopEnterpriseService
             'uuid' => (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'product_id' => $extra['product_id'] ?? ($imei->product_id ?? null),
             'imei_uuid' => $imei->uuid,
-            'product_uuid' => $imei->product_uuid,
+            'product_uuid' => $extra['product_uuid'] ?? $imei->product_uuid,
             'movement_type' => $type,
             'reference' => $reference,
             'from_status' => $imei->status,
@@ -602,6 +658,7 @@ class MobileShopEnterpriseService
             'uuid' => (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'product_id' => $product->id,
             'product_uuid' => $product->uuid,
             'product_name' => $product->product_name,
             'type' => $type,
@@ -633,6 +690,7 @@ class MobileShopEnterpriseService
             'uuid' => (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'customer_id' => $customer->id,
             'customer_uuid' => $customer->uuid,
             'type' => $type,
             'amount' => $amount,
@@ -649,6 +707,7 @@ class MobileShopEnterpriseService
             'uuid' => (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
+            'supplier_id' => $supplier->id,
             'supplier_uuid' => $supplier->uuid,
             'type' => $type,
             'amount' => $amount,
@@ -674,6 +733,22 @@ class MobileShopEnterpriseService
         return Supplier::where('license_uuid', $actor->license_uuid)->where('uuid', $uuid)->first();
     }
 
+    private function saleItem(?string $uuid, User $actor): ?SaleItem
+    {
+        if (! $uuid) {
+            return null;
+        }
+        return SaleItem::where('license_uuid', $actor->license_uuid)->where('uuid', $uuid)->first();
+    }
+
+    private function purchaseItem(?string $uuid, User $actor): ?PurchaseItem
+    {
+        if (! $uuid) {
+            return null;
+        }
+        return PurchaseItem::where('license_uuid', $actor->license_uuid)->where('uuid', $uuid)->first();
+    }
+
     private function nextNumber(string $model, string $prefix, User $actor): string
     {
         $count = $model::withTrashed()->where('license_uuid', $actor->license_uuid)->count() + 1;
@@ -686,7 +761,49 @@ class MobileShopEnterpriseService
         if (Schema::hasTable($table)) {
             $payload = array_intersect_key($payload, array_flip(Schema::getColumnListing($table)));
         }
-        return $model->newQuery()->create($payload);
+        $this->validateLegacyPayload($table, $payload);
+
+        try {
+            return $model->newQuery()->create($payload);
+        } catch (QueryException $exception) {
+            Log::error('Mobile shop child insert failed', [
+                'table' => $table,
+                'payload' => $payload,
+                'error' => $exception->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'database' => "Could not save {$table}. Please verify required legacy fields.",
+            ]);
+        }
+    }
+
+    private function validateLegacyPayload(string $table, array $payload): void
+    {
+        $required = [
+            'sale_items' => ['sale_id', 'product_id'],
+            'inventory_transactions' => ['product_id'],
+            'purchase_items' => ['purchase_id', 'product_id'],
+        ][$table] ?? [];
+
+        foreach ($required as $column) {
+            if ($this->hasColumn($table, $column) && empty($payload[$column])) {
+                Log::error('Mobile shop child insert failed', [
+                    'table' => $table,
+                    'payload' => $payload,
+                    'missing_column' => $column,
+                ]);
+
+                throw ValidationException::withMessages([
+                    $column => "{$table}.{$column} is required by the legacy database schema.",
+                ]);
+            }
+        }
+    }
+
+    private function hasColumn(string $table, string $column): bool
+    {
+        return Schema::hasTable($table) && Schema::hasColumn($table, $column);
     }
 
     private function queueMany(User $actor, array $rows): void
