@@ -19,7 +19,7 @@ class SyncController extends Controller
             'operations.*.entity' => ['required', 'string'],
             'operations.*.action' => ['required', 'in:create,update,delete,force_delete'],
             'operations.*.data' => ['nullable', 'array'],
-            'operations.*.client_updated_at' => ['required', 'date'],
+            'operations.*.client_updated_at' => ['nullable', 'date'],
         ]);
 
         return ['results' => $sync->apply($payload['device_id'], $payload['operations'], $request->user())];

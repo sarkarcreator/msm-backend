@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\SyncQueue;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class SyncService
 {
@@ -73,53 +75,62 @@ class SyncService
     {
         return DB::transaction(function () use ($deviceId, $operations, $actor) {
             return collect($operations)->map(function (array $operation) use ($deviceId, $actor) {
-                $model = $this->models[$operation['entity']] ?? null;
-                if (! $model) {
-                    return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Unknown entity'];
-                }
-
-                $data = $operation['data'] ?? [];
-                $actorRole = optional($actor?->role)->name;
-                if ($actorRole !== 'Super Admin' && in_array($operation['entity'], $this->licenseScopedEntities, true)) {
-                    if (! $actor?->license_uuid) {
-                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Missing tenant scope'];
+                try {
+                    $model = $this->models[$operation['entity']] ?? null;
+                    if (! $model) {
+                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Unknown entity'];
                     }
-                    $data['license_uuid'] = $actor->license_uuid;
-                    if ($actor?->business_type) {
-                        $data['business_type'] = $actor->business_type;
+
+                    $data = $operation['data'] ?? [];
+                    $actorRole = optional($actor?->role)->name;
+                    if ($actorRole !== 'Super Admin' && in_array($operation['entity'], $this->licenseScopedEntities, true)) {
+                        if (! $actor?->license_uuid) {
+                            return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Missing tenant scope'];
+                        }
+                        $data['license_uuid'] = $actor->license_uuid;
+                        if ($actor?->business_type) {
+                            $data['business_type'] = $actor->business_type;
+                        }
                     }
+
+                    $instance = app($model);
+                    $table = $instance->getTable();
+                    $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($model), true);
+                    $query = $usesSoftDeletes ? $model::withTrashed() : $instance->newQuery();
+                    $query = $this->scopeQuery($query, $table, $actor, $operation['entity']);
+                    $data = $this->normalizeDateTimes($this->onlyTableColumns($table, $data), $table);
+                    $record = $query->where('uuid', $operation['uuid'])->first();
+
+                    if ($record && isset($data['revision']) && isset($record->revision) && (int) $record->revision > (int) $data['revision']) {
+                        $this->logConflict($operation, $deviceId, $data, $actor, 'revision_conflict');
+                        return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
+                    }
+
+                    $clientUpdatedAt = $this->safeTimestamp($operation['client_updated_at'] ?? null);
+                    if ($record && $clientUpdatedAt && $record->updated_at && $record->updated_at->gt($clientUpdatedAt)) {
+                        $this->logConflict($operation, $deviceId, $data, $actor, 'updated_at_conflict');
+                        return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'server' => $record];
+                    }
+
+                    if ($operation['action'] === 'force_delete') {
+                        $record?->forceDelete();
+                    } elseif ($operation['action'] === 'delete') {
+                        $record?->delete();
+                    } else {
+                        $query->updateOrCreate(['uuid' => $operation['uuid']], $data);
+                    }
+
+                    SyncQueue::create($this->syncQueuePayload($operation, $deviceId, $data, $actor));
+
+                    return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
+                } catch (Throwable $exception) {
+                    return [
+                        'uuid' => $operation['uuid'] ?? null,
+                        'status' => 'rejected',
+                        'reason' => 'sync_validation_failed',
+                        'message' => $exception->getMessage(),
+                    ];
                 }
-
-                $instance = app($model);
-                $table = $instance->getTable();
-                $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($model), true);
-                $query = $usesSoftDeletes ? $model::withTrashed() : $instance->newQuery();
-                $query = $this->scopeQuery($query, $table, $actor, $operation['entity']);
-                $data = $this->onlyTableColumns($table, $data);
-                $record = $query->where('uuid', $operation['uuid'])->first();
-
-                if ($record && isset($data['revision']) && isset($record->revision) && (int) $record->revision > (int) $data['revision']) {
-                    $this->logConflict($operation, $deviceId, $data, $actor, 'revision_conflict');
-                    return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
-                }
-
-                $clientUpdatedAt = $operation['client_updated_at'] ?? null;
-                if ($record && $clientUpdatedAt && $record->updated_at && $record->updated_at->gt($clientUpdatedAt)) {
-                    $this->logConflict($operation, $deviceId, $data, $actor, 'updated_at_conflict');
-                    return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'server' => $record];
-                }
-
-                if ($operation['action'] === 'force_delete') {
-                    $record?->forceDelete();
-                } elseif ($operation['action'] === 'delete') {
-                    $record?->delete();
-                } else {
-                    $query->updateOrCreate(['uuid' => $operation['uuid']], $data);
-                }
-
-                SyncQueue::create($this->syncQueuePayload($operation, $deviceId, $data, $actor));
-
-                return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
             })->all();
         });
     }
@@ -132,7 +143,7 @@ class SyncService
             'entity' => $operation['entity'],
             'action' => $operation['action'],
             'payload' => $data,
-            'synced_at' => now(),
+            'synced_at' => $this->formatTimestamp(now()),
         ];
 
         if (Schema::hasColumn('sync_queue', 'license_uuid')) {
@@ -142,7 +153,7 @@ class SyncService
             $payload['business_type'] = $data['business_type'] ?? $actor?->business_type;
         }
         if (Schema::hasColumn('sync_queue', 'record_updated_at')) {
-            $payload['record_updated_at'] = $data['updated_at'] ?? now();
+            $payload['record_updated_at'] = $this->formatTimestamp($data['updated_at'] ?? now());
         }
         if (Schema::hasColumn('sync_queue', 'is_tombstone')) {
             $payload['is_tombstone'] = in_array($operation['action'], ['delete', 'force_delete'], true);
@@ -156,7 +167,7 @@ class SyncService
         $payload = $this->syncQueuePayload($operation, $deviceId, $data, $actor);
         $payload['action'] = 'conflict';
         $payload['payload'] = array_merge($payload['payload'] ?? [], ['conflict_reason' => $reason]);
-        SyncQueue::create($payload);
+        SyncQueue::create($this->normalizeDateTimes($payload, 'sync_queue'));
     }
 
     private function onlyTableColumns(string $table, array $data): array
@@ -167,6 +178,58 @@ class SyncService
 
         $allowed = array_flip(Schema::getColumnListing($table));
         return array_intersect_key($data, $allowed);
+    }
+
+    private function normalizeDateTimes(array $data, string $table): array
+    {
+        if (! Schema::hasTable($table)) {
+            return $data;
+        }
+
+        foreach ($data as $key => $value) {
+            if (! $this->isDateTimeField($table, $key)) {
+                continue;
+            }
+            $data[$key] = $this->formatTimestamp($value);
+        }
+
+        return $data;
+    }
+
+    private function isDateTimeField(string $table, string $key): bool
+    {
+        if (! Schema::hasColumn($table, $key)) {
+            return false;
+        }
+
+        if (in_array($key, ['created_at', 'updated_at', 'deleted_at', 'synced_at', 'record_updated_at'], true)) {
+            return true;
+        }
+
+        return str_ends_with($key, '_at');
+    }
+
+    private function formatTimestamp($value): string
+    {
+        return $this->safeTimestamp($value)->format('Y-m-d H:i:s');
+    }
+
+    private function safeTimestamp($value): Carbon
+    {
+        try {
+            if ($value instanceof Carbon) {
+                return $value;
+            }
+            if ($value instanceof \DateTimeInterface) {
+                return Carbon::instance($value);
+            }
+            if ($value === null || $value === '') {
+                return now();
+            }
+            return Carbon::parse($value);
+        } catch (Throwable) {
+            return now();
+        }
     }
 
     private function scopeQuery($query, string $table, ?User $actor, string $entity)
