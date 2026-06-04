@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\SyncQueue;
 use App\Models\User;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -71,19 +72,30 @@ class SyncService
                 $data = $operation['data'] ?? [];
                 $actorRole = optional($actor?->role)->name;
                 if ($actorRole !== 'Super Admin' && in_array($operation['entity'], $this->licenseScopedEntities, true)) {
-                    if ($actor?->license_uuid) {
-                        $data['license_uuid'] = $actor->license_uuid;
+                    if (! $actor?->license_uuid) {
+                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Missing tenant scope'];
                     }
+                    $data['license_uuid'] = $actor->license_uuid;
                     if ($actor?->business_type) {
                         $data['business_type'] = $actor->business_type;
                     }
                 }
 
-                $query = app($model)->newQuery();
-                $data = $this->onlyTableColumns(app($model)->getTable(), $data);
+                $instance = app($model);
+                $table = $instance->getTable();
+                $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($model), true);
+                $query = $usesSoftDeletes ? $model::withTrashed() : $instance->newQuery();
+                $query = $this->scopeQuery($query, $table, $actor, $operation['entity']);
+                $data = $this->onlyTableColumns($table, $data);
                 $record = $query->where('uuid', $operation['uuid'])->first();
 
-                if ($record && $record->updated_at->gt($operation['client_updated_at'])) {
+                if ($record && isset($data['revision']) && isset($record->revision) && (int) $record->revision > (int) $data['revision']) {
+                    $this->logConflict($operation, $deviceId, $data, $actor, 'revision_conflict');
+                    return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
+                }
+
+                if ($record && $record->updated_at && $record->updated_at->gt($operation['client_updated_at'])) {
+                    $this->logConflict($operation, $deviceId, $data, $actor, 'updated_at_conflict');
                     return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'server' => $record];
                 }
 
@@ -95,17 +107,46 @@ class SyncService
                     $query->updateOrCreate(['uuid' => $operation['uuid']], $data);
                 }
 
-                SyncQueue::create([
-                    'uuid' => $operation['uuid'],
-                    'device_id' => $deviceId,
-                    'entity' => $operation['entity'],
-                    'action' => $operation['action'],
-                    'payload' => $data,
-                ]);
+                SyncQueue::create($this->syncQueuePayload($operation, $deviceId, $data, $actor));
 
                 return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
             })->all();
         });
+    }
+
+    private function syncQueuePayload(array $operation, string $deviceId, array $data, ?User $actor): array
+    {
+        $payload = [
+            'uuid' => $operation['uuid'],
+            'device_id' => $deviceId,
+            'entity' => $operation['entity'],
+            'action' => $operation['action'],
+            'payload' => $data,
+            'synced_at' => now(),
+        ];
+
+        if (Schema::hasColumn('sync_queue', 'license_uuid')) {
+            $payload['license_uuid'] = $data['license_uuid'] ?? $actor?->license_uuid;
+        }
+        if (Schema::hasColumn('sync_queue', 'business_type')) {
+            $payload['business_type'] = $data['business_type'] ?? $actor?->business_type;
+        }
+        if (Schema::hasColumn('sync_queue', 'record_updated_at')) {
+            $payload['record_updated_at'] = $data['updated_at'] ?? now();
+        }
+        if (Schema::hasColumn('sync_queue', 'is_tombstone')) {
+            $payload['is_tombstone'] = in_array($operation['action'], ['delete', 'force_delete'], true);
+        }
+
+        return $payload;
+    }
+
+    private function logConflict(array $operation, string $deviceId, array $data, ?User $actor, string $reason): void
+    {
+        $payload = $this->syncQueuePayload($operation, $deviceId, $data, $actor);
+        $payload['action'] = 'conflict';
+        $payload['payload'] = array_merge($payload['payload'] ?? [], ['conflict_reason' => $reason]);
+        SyncQueue::create($payload);
     }
 
     private function onlyTableColumns(string $table, array $data): array
@@ -116,5 +157,15 @@ class SyncService
 
         $allowed = array_flip(Schema::getColumnListing($table));
         return array_intersect_key($data, $allowed);
+    }
+
+    private function scopeQuery($query, string $table, ?User $actor, string $entity)
+    {
+        $role = optional($actor?->role)->name;
+        if ($role === 'Super Admin' || ! in_array($entity, $this->licenseScopedEntities, true) || ! Schema::hasColumn($table, 'license_uuid')) {
+            return $query;
+        }
+
+        return $query->where('license_uuid', $actor?->license_uuid);
     }
 }

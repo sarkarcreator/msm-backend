@@ -63,6 +63,11 @@ class LicenseActivationController extends Controller
         $role = Role::firstOrCreate(['name' => 'Admin'], ['uuid' => (string) Str::uuid()]);
         $shopName = $data['shop_name'] ?? $license->owner_name;
         $businessType = $license->business_type ?: ($license->metadata['business_type'] ?? 'Mobile Shop');
+        $existingEmailUser = User::where('email', $data['email'])->first();
+        if ($existingEmailUser && $existingEmailUser->license_uuid && $existingEmailUser->license_uuid !== $license->uuid) {
+            throw ValidationException::withMessages(['email' => 'This email is already registered with another license.']);
+        }
+
         $user = User::updateOrCreate(
             ['email' => $data['email']],
             [

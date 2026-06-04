@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Role;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class ResourceController extends Controller
 {
@@ -105,6 +107,7 @@ class ResourceController extends Controller
             ->where(fn ($query) => $query->where('uuid', $id)->orWhere('id', $id))
             ->firstOrFail();
         $payload = $this->payload($request, true);
+        $this->guardStatusTransition($record, $payload);
         $record->update($payload);
         $this->audit($request, 'update', $record->uuid, $payload);
 
@@ -131,31 +134,36 @@ class ResourceController extends Controller
         if ($resource === 'licenses') {
             $users = \App\Models\User::withTrashed()->where('license_uuid', $uuid)->get();
             foreach ($users as $user) {
+                $userPayload = $user->toArray();
                 $force ? $user->forceDelete() : $user->delete();
+                $this->queueTombstone($request, 'users', $user->uuid, $userPayload, $force);
             }
         }
         if ($resource === 'patients') {
-            $this->deletePatientWorkflow($uuid, $force);
+            $this->deletePatientWorkflow($request, $uuid, $force);
         }
+        $this->queueTombstone($request, $resource, $uuid, $payload, $force);
         $this->audit($request, $force ? 'permanent_delete' : 'soft_delete', $uuid, $payload);
 
         return response()->noContent();
     }
 
-    private function deletePatientWorkflow(string $patientUuid, bool $force): void
+    private function deletePatientWorkflow(Request $request, string $patientUuid, bool $force): void
     {
         foreach ([
-            \App\Models\HospitalPrescription::class,
-            \App\Models\HospitalOrder::class,
-            \App\Models\HospitalTask::class,
-            \App\Models\LabReport::class,
-            \App\Models\RadiologyReport::class,
-            \App\Models\HospitalBill::class,
-            \App\Models\HospitalBillItem::class,
-        ] as $model) {
+            'hospital_prescriptions' => \App\Models\HospitalPrescription::class,
+            'hospital_orders' => \App\Models\HospitalOrder::class,
+            'hospital_tasks' => \App\Models\HospitalTask::class,
+            'lab_reports' => \App\Models\LabReport::class,
+            'radiology_reports' => \App\Models\RadiologyReport::class,
+            'hospital_bills' => \App\Models\HospitalBill::class,
+            'hospital_bill_items' => \App\Models\HospitalBillItem::class,
+        ] as $entity => $model) {
             $rows = $model::withTrashed()->where('patient_uuid', $patientUuid)->get();
             foreach ($rows as $row) {
+                $payload = $row->toArray();
                 $force ? $row->forceDelete() : $row->delete();
+                $this->queueTombstone($request, str_replace('_', '-', $entity), $row->uuid, $payload, $force);
             }
         }
     }
@@ -170,7 +178,12 @@ class ResourceController extends Controller
         $query = app($this->models[$resource])->newQuery();
         $role = optional($request->user()?->role)->name;
 
-        if ($role !== 'Super Admin' && $request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
+        if (Schema::hasColumn(app($this->models[$resource])->getTable(), 'quarantined_at')) {
+            $query->whereNull('quarantined_at');
+        }
+
+        if ($role !== 'Super Admin' && $this->hasLicenseColumn($resource)) {
+            abort_unless($request->user()?->license_uuid, 403, 'Tenant scope is required.');
             $query->where('license_uuid', $request->user()->license_uuid);
         }
 
@@ -294,6 +307,9 @@ class ResourceController extends Controller
             if ($request->user()?->business_type && $this->hasLicenseColumn($resource)) {
                 $payload['business_type'] = $request->user()->business_type;
             }
+            if ($resource === 'patients' && blank($payload['token_number'] ?? null)) {
+                $payload['token_number'] = $this->nextPatientToken($request);
+            }
             return $payload;
         }
 
@@ -355,5 +371,82 @@ class ResourceController extends Controller
     private function hasLicenseColumn(string $resource): bool
     {
         return in_array($resource, $this->licenseScopedResources, true);
+    }
+
+    private function guardStatusTransition($record, array $payload): void
+    {
+        if (! $record instanceof \App\Models\Patient || ! array_key_exists('status', $payload)) {
+            return;
+        }
+
+        $flow = [
+            'Waiting' => ['Doctor Checked'],
+            'Doctor Checked' => ['Sent To Reception'],
+            'Sent To Reception' => ['Under Treatment'],
+            'Under Treatment' => ['Treatment Completed'],
+            'Treatment Completed' => ['Closed'],
+            'Closed' => [],
+        ];
+        $current = $record->status ?: 'Waiting';
+        $next = $payload['status'];
+
+        if ($current !== $next && ! in_array($next, $flow[$current] ?? [], true)) {
+            throw ValidationException::withMessages([
+                'status' => "Invalid status transition from {$current} to {$next}.",
+            ]);
+        }
+    }
+
+    private function queueTombstone(Request $request, string $resource, string $uuid, array $payload, bool $force): void
+    {
+        $entity = str_replace('-', '_', $resource);
+        $row = [
+            'uuid' => $uuid,
+            'device_id' => $request->header('X-Device-Id', 'api'),
+            'entity' => $entity,
+            'action' => $force ? 'force_delete' : 'delete',
+            'payload' => $payload,
+            'synced_at' => now(),
+        ];
+
+        if (Schema::hasColumn('sync_queue', 'license_uuid')) {
+            $row['license_uuid'] = $payload['license_uuid'] ?? $request->user()?->license_uuid;
+        }
+        if (Schema::hasColumn('sync_queue', 'business_type')) {
+            $row['business_type'] = $payload['business_type'] ?? $request->user()?->business_type;
+        }
+        if (Schema::hasColumn('sync_queue', 'record_updated_at')) {
+            $row['record_updated_at'] = now();
+        }
+        if (Schema::hasColumn('sync_queue', 'is_tombstone')) {
+            $row['is_tombstone'] = true;
+        }
+
+        \App\Models\SyncQueue::create($row);
+    }
+
+    private function nextPatientToken(Request $request): string
+    {
+        $licenseUuid = $request->user()?->license_uuid;
+        abort_unless($licenseUuid, 403, 'Tenant scope is required.');
+
+        $last = \App\Models\Patient::withTrashed()
+            ->where('license_uuid', $licenseUuid)
+            ->where('token_number', 'like', 'T-%')
+            ->orderByDesc('id')
+            ->value('token_number');
+
+        $number = $last ? ((int) preg_replace('/\D+/', '', $last)) + 1 : 1;
+
+        do {
+            $token = 'T-' . str_pad((string) $number, 6, '0', STR_PAD_LEFT);
+            $exists = \App\Models\Patient::withTrashed()
+                ->where('license_uuid', $licenseUuid)
+                ->where('token_number', $token)
+                ->exists();
+            $number++;
+        } while ($exists);
+
+        return $token;
     }
 }

@@ -2,22 +2,28 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\HospitalWorkflowController;
 use App\Http\Controllers\Api\LicenseActivationController;
 use App\Http\Controllers\Api\MedicineController;
 use App\Http\Controllers\Api\ResourceController;
 use App\Http\Controllers\Api\SyncController;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/license/activate', [LicenseActivationController::class, 'activate']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::post('/license/activate', [LicenseActivationController::class, 'activate'])->middleware('throttle:10,1');
 Route::get('/health', fn () => ['status' => 'ok']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/dashboard', DashboardController::class);
-    Route::post('/sync/push', [SyncController::class, 'push']);
-    Route::get('/sync/pull', [SyncController::class, 'pull']);
+    Route::post('/sync/push', [SyncController::class, 'push'])->middleware('throttle:60,1');
+    Route::get('/sync/pull', [SyncController::class, 'pull'])->middleware('throttle:120,1');
+    Route::post('/hospital/workflows', [HospitalWorkflowController::class, 'store'])->middleware('throttle:60,1');
+    Route::patch('/hospital/patients/{patient}/status', [HospitalWorkflowController::class, 'transitionPatient'])->middleware('throttle:120,1');
+    Route::post('/hospital/bills/{bill}/recalculate', [HospitalWorkflowController::class, 'recalculateBill'])->middleware('throttle:120,1');
+    Route::post('/hospital/prescriptions/{prescription}/complete', [HospitalWorkflowController::class, 'completePrescription'])->middleware('throttle:120,1');
+    Route::post('/hospital/lab-reports/{report}/complete', [HospitalWorkflowController::class, 'completeLabReport'])->middleware('throttle:120,1');
     Route::get('/medicines/search', [MedicineController::class, 'search'])->middleware('throttle:120,1');
     Route::post('/medicines/import', [MedicineController::class, 'import'])->middleware('throttle:10,1');
     Route::get('/medicine-categories', [MedicineController::class, 'categories']);
