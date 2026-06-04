@@ -8,9 +8,11 @@ use Illuminate\Support\Facades\Schema;
 
 class HospitalAuditIntegrityCommand extends Command
 {
-    protected $signature = 'hospital:audit-integrity {--json : Output JSON report}';
+    protected $signature = 'hospital:audit-integrity
+        {--json : Output JSON report}
+        {--repair : Soft-delete orphan bill items and recalculate mismatched bills}';
 
-    protected $description = 'Audit hospital workflow integrity without modifying records.';
+    protected $description = 'Audit hospital workflow integrity and optionally repair safe billing inconsistencies.';
 
     public function handle(): int
     {
@@ -28,6 +30,12 @@ class HospitalAuditIntegrityCommand extends Command
             'billing_mismatches' => $this->billingMismatches(),
         ];
 
+        $repairReport = null;
+        if ($this->option('repair')) {
+            $repairReport = $this->repair($report);
+            $report['repair'] = $repairReport;
+        }
+
         if ($this->option('json')) {
             $this->line(json_encode($report, JSON_PRETTY_PRINT));
             return self::SUCCESS;
@@ -43,6 +51,13 @@ class HospitalAuditIntegrityCommand extends Command
             $this->line(str_replace('_', ' ', ucfirst($key)) . ": {$count}");
             if ($count > 0) {
                 $this->table(array_keys((array) $value[0]), array_map(fn ($row) => (array) $row, $value));
+            }
+        }
+
+        if ($repairReport) {
+            $this->info('Repair Summary');
+            foreach ($repairReport as $key => $value) {
+                $this->line(str_replace('_', ' ', ucfirst($key)) . ": {$value}");
             }
         }
 
@@ -136,5 +151,81 @@ class HospitalAuditIntegrityCommand extends Command
             ->limit(200)
             ->get()
             ->all();
+    }
+
+    private function repair(array $report): array
+    {
+        return DB::transaction(function () use ($report) {
+            $orphanBillItemUuids = collect($report['orphan_bill_items'] ?? [])
+                ->pluck('uuid')
+                ->filter()
+                ->values();
+
+            $orphanBillItemsRepaired = 0;
+            if ($orphanBillItemUuids->isNotEmpty()) {
+                $orphanBillItemsRepaired = DB::table('hospital_bill_items')
+                    ->whereIn('uuid', $orphanBillItemUuids)
+                    ->whereNull('deleted_at')
+                    ->update([
+                        'deleted_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            $billingMismatchesRepaired = 0;
+            foreach ($report['billing_mismatches'] ?? [] as $mismatch) {
+                $billUuid = $mismatch->uuid ?? null;
+                if (! $billUuid) {
+                    continue;
+                }
+
+                $lines = DB::table('hospital_bill_items')
+                    ->where('bill_uuid', $billUuid)
+                    ->whereNull('deleted_at')
+                    ->select('item_type', 'amount')
+                    ->get();
+
+                $totals = $this->totals($lines);
+                $paid = (float) DB::table('hospital_bills')
+                    ->where('uuid', $billUuid)
+                    ->value('paid');
+                $balance = max(0, $totals['grand_total'] - $paid);
+
+                $billingMismatchesRepaired += DB::table('hospital_bills')
+                    ->where('uuid', $billUuid)
+                    ->whereNull('deleted_at')
+                    ->update(array_merge($totals, [
+                        'balance' => $balance,
+                        'status' => $balance <= 0 ? 'Paid' : 'Pending',
+                        'updated_at' => now(),
+                    ]));
+            }
+
+            return [
+                'orphan_bill_items_repaired' => $orphanBillItemsRepaired,
+                'billing_mismatches_repaired' => $billingMismatchesRepaired,
+            ];
+        });
+    }
+
+    private function totals($items): array
+    {
+        $items = collect($items);
+        $sumType = fn (string $type) => $items
+            ->where('item_type', $type)
+            ->sum(fn ($item) => (float) ($item->amount ?? 0));
+        $procedure = $items
+            ->reject(fn ($item) => in_array($item->item_type ?? '', ['Doctor Fee', 'Medicine', 'Injection', 'Lab', 'Radiology'], true))
+            ->sum(fn ($item) => (float) ($item->amount ?? 0));
+
+        return [
+            'doctor_fee' => $sumType('Doctor Fee'),
+            'medicine_charges' => $sumType('Medicine'),
+            'injection_charges' => $sumType('Injection'),
+            'lab_charges' => $sumType('Lab'),
+            'radiology_charges' => $sumType('Radiology'),
+            'procedure_charges' => $procedure,
+            'grand_total' => $items->sum(fn ($item) => (float) ($item->amount ?? 0)),
+        ];
     }
 }
