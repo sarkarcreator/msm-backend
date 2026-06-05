@@ -63,7 +63,7 @@ class MobileShopEnterpriseService
                     throw ValidationException::withMessages(['stock' => "{$product->product_name} stock is not enough."]);
                 }
 
-                $imei = $this->resolveImeiForSale($item, $product, $actor);
+                $imei = $this->isMobileShopTenant($actor) ? $this->resolveImeiForSale($item, $product, $actor) : null;
                 $price = (float) ($item['price'] ?? $product->sale_price ?? 0);
                 $subtotal += $quantity * $price;
                 $profit += ($price - (float) ($product->purchase_price ?? 0)) * $quantity;
@@ -112,12 +112,13 @@ class MobileShopEnterpriseService
                 /** @var Product $product */
                 $product = $line['product'];
                 $imei = $line['imei'];
-                $imeiNumbers = $this->imeiNumbersFromItem($line['item'] ?? [], $product);
+                $imeiNumbers = $this->isMobileShopTenant($actor) ? $this->imeiNumbersFromItem($line['item'] ?? [], $product) : [];
                 $product->update([
                     'quantity' => max(0, (int) $product->quantity - $line['quantity']),
                     'revision' => ((int) ($product->revision ?? 1)) + 1,
                 ]);
 
+                $mobileImeiTracking = $this->isMobileShopTenant($actor);
                 $saleItem = $this->createRecord(new SaleItem(), [
                     'uuid' => (string) Str::uuid(),
                     'license_uuid' => $actor->license_uuid,
@@ -128,11 +129,11 @@ class MobileShopEnterpriseService
                     'product_uuid' => $product->uuid,
                     'product_name' => $product->product_name,
                     'imei_uuid' => $imei?->uuid,
-                    'imei_1' => $imei?->imei_1 ?? $product->imei_1 ?? $product->imei ?? null,
-                    'imei_2' => $imei?->imei_2 ?? $product->imei_2 ?? null,
-                    'imei_numbers' => $imei?->imei_numbers ?: $imeiNumbers,
-                    'serial_number' => $imei?->serial_number ?? $product->serial_number ?? null,
-                    'imei' => $imei?->imei_1 ?? $product->imei ?? null,
+                    'imei_1' => $mobileImeiTracking ? ($imei?->imei_1 ?? $product->imei_1 ?? $product->imei ?? null) : null,
+                    'imei_2' => $mobileImeiTracking ? ($imei?->imei_2 ?? $product->imei_2 ?? null) : null,
+                    'imei_numbers' => $mobileImeiTracking ? ($imei?->imei_numbers ?: $imeiNumbers) : [],
+                    'serial_number' => $mobileImeiTracking ? ($imei?->serial_number ?? $product->serial_number ?? null) : null,
+                    'imei' => $mobileImeiTracking ? ($imei?->imei_1 ?? $product->imei ?? null) : null,
                     'quantity' => $line['quantity'],
                     'price' => $line['price'],
                     'profit' => ($line['price'] - (float) ($product->purchase_price ?? 0)) * $line['quantity'],
@@ -247,15 +248,17 @@ class MobileShopEnterpriseService
                 ]);
                 $createdItems[] = $purchaseItem;
                 $this->inventory($actor, $product, 'Stock In', $quantity, $purchase->invoice_number, 'Purchase');
-                foreach ($this->imeiRowsFromItem($item) as $imeiRow) {
-                    $imei = $this->createImei($actor, $product, $imeiRow);
-                    $createdImeis[] = $imei;
-                    $createdMovements[] = $this->moveImei($actor, $imei, 'Purchase', $purchase->invoice_number, 'In Stock', [
-                        'purchase_id' => $purchase->id,
-                        'purchase_uuid' => $purchase->uuid,
-                        'product_id' => $product->id,
-                        'product_uuid' => $product->uuid,
-                    ]);
+                if ($this->isMobileShopTenant($actor)) {
+                    foreach ($this->imeiRowsFromItem($item) as $imeiRow) {
+                        $imei = $this->createImei($actor, $product, $imeiRow);
+                        $createdImeis[] = $imei;
+                        $createdMovements[] = $this->moveImei($actor, $imei, 'Purchase', $purchase->invoice_number, 'In Stock', [
+                            'purchase_id' => $purchase->id,
+                            'purchase_uuid' => $purchase->uuid,
+                            'product_id' => $product->id,
+                            'product_uuid' => $product->uuid,
+                        ]);
+                    }
                 }
             }
 
@@ -862,5 +865,10 @@ class MobileShopEnterpriseService
         }
 
         return $key;
+    }
+
+    private function isMobileShopTenant(User $actor): bool
+    {
+        return $this->retailBusinessTypeKey($actor->business_type) === 'mobile_shop';
     }
 }
