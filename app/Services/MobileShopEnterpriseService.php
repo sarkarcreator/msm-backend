@@ -56,7 +56,7 @@ class MobileShopEnterpriseService
             foreach ($items as $item) {
                 $product = $productRows->get($item['product_uuid'] ?? '');
                 if (! $product) {
-                    throw ValidationException::withMessages(['product_uuid' => 'Product not found in this mobile shop.']);
+                    throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
                 if ((int) $product->quantity < $quantity) {
@@ -223,7 +223,7 @@ class MobileShopEnterpriseService
             foreach ($items as $item) {
                 $product = $productRows->get($item['product_uuid'] ?? '');
                 if (! $product) {
-                    throw ValidationException::withMessages(['product_uuid' => 'Product not found in this mobile shop.']);
+                    throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
                 $cost = (float) ($item['cost_price'] ?? $item['purchase_price'] ?? 0);
@@ -846,8 +846,21 @@ class MobileShopEnterpriseService
 
     private function assertMobileShop(User $actor): void
     {
-        if (! $actor->license_uuid || $actor->business_type !== 'Mobile Shop') {
-            throw ValidationException::withMessages(['business_type' => 'Mobile Shop tenant is required.']);
+        if (! $actor->license_uuid || ! in_array($this->retailBusinessTypeKey($actor->business_type), ['mobile_shop', 'general_store'], true)) {
+            throw ValidationException::withMessages(['business_type' => 'Retail tenant is required.']);
         }
+    }
+
+    private function retailBusinessTypeKey(?string $type): string
+    {
+        $key = strtolower(str_replace([' ', '-'], '_', (string) $type));
+        if (in_array($key, ['mobile_shop', 'mobile'], true)) {
+            return 'mobile_shop';
+        }
+        if (in_array($key, ['general_store', 'grocery_store', 'shopping_mall', 'traders', 'retail_shop'], true)) {
+            return 'general_store';
+        }
+
+        return $key;
     }
 }

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\GeneralStoreEnterpriseController;
 use App\Http\Controllers\Api\HospitalWorkflowController;
 use App\Http\Controllers\Api\LicenseActivationController;
 use App\Http\Controllers\Api\MedicineController;
@@ -31,6 +32,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/hospital/radiology-reports/{report}/review', [HospitalWorkflowController::class, 'reviewRadiologyReport'])->middleware('throttle:120,1');
     Route::post('/mobile-shop/sales', [MobileShopEnterpriseController::class, 'sale'])->middleware('throttle:120,1');
     Route::post('/mobile-shop/purchases', [MobileShopEnterpriseController::class, 'purchase'])->middleware('throttle:120,1');
+    Route::post('/general-store/sales', [GeneralStoreEnterpriseController::class, 'sale'])->middleware('throttle:120,1');
+    Route::post('/general-store/purchases', [GeneralStoreEnterpriseController::class, 'purchase'])->middleware('throttle:120,1');
     Route::get('/mobile-shop/imeis/search', [MobileShopEnterpriseController::class, 'searchImei'])->middleware('throttle:120,1');
     Route::post('/mobile-shop/warranty-claims', [MobileShopEnterpriseController::class, 'warrantyClaim'])->middleware('throttle:60,1');
     Route::post('/mobile-shop/sale-returns', [MobileShopEnterpriseController::class, 'saleReturn'])->middleware('throttle:60,1');
