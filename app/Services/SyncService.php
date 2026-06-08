@@ -12,6 +12,10 @@ use Throwable;
 
 class SyncService
 {
+    public function __construct(private SyncAuthorizationService $authorization)
+    {
+    }
+
     private array $models = [
         'products' => \App\Models\Product::class,
         'categories' => \App\Models\Category::class,
@@ -95,22 +99,17 @@ class SyncService
                     }
 
                     $data = $operation['data'] ?? [];
-                    $actorRole = optional($actor?->role)->name;
-                    if ($actorRole !== 'Super Admin' && in_array($operation['entity'], $this->licenseScopedEntities, true)) {
-                        if (! $actor?->license_uuid) {
-                            return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Missing tenant scope'];
-                        }
-                        $data['license_uuid'] = $actor->license_uuid;
-                        if ($actor?->business_type) {
-                            $data['business_type'] = $actor->business_type;
-                        }
+                    $authorization = $this->authorization->authorizeOperation($actor, $operation['entity'], $operation['action'], $data);
+                    if (! $authorization['allowed']) {
+                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => $authorization['reason']];
                     }
+                    $data = $authorization['data'];
 
                     $instance = app($model);
                     $table = $instance->getTable();
                     $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($model), true);
                     $query = $usesSoftDeletes ? $model::withTrashed() : $instance->newQuery();
-                    $query = $this->scopeQuery($query, $table, $actor, $operation['entity']);
+                    $query = $this->authorization->scopeQuery($query, $table, $actor, $operation['entity']);
                     $data = $this->normalizeDateTimes($this->onlyTableColumns($table, $data), $table);
                     $record = $query->where('uuid', $operation['uuid'])->first();
 
@@ -245,13 +244,4 @@ class SyncService
         }
     }
 
-    private function scopeQuery($query, string $table, ?User $actor, string $entity)
-    {
-        $role = optional($actor?->role)->name;
-        if ($role === 'Super Admin' || ! in_array($entity, $this->licenseScopedEntities, true) || ! Schema::hasColumn($table, 'license_uuid')) {
-            return $query;
-        }
-
-        return $query->where('license_uuid', $actor?->license_uuid);
-    }
 }

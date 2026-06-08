@@ -13,6 +13,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withCommands([
         \App\Console\Commands\HospitalAuditIntegrityCommand::class,
+        \App\Console\Commands\SystemAuditIntegrityCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         //
