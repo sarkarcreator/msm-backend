@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\MedicineController;
 use App\Http\Controllers\Api\MobileShopEnterpriseController;
 use App\Http\Controllers\Api\ResourceController;
 use App\Http\Controllers\Api\SyncController;
+use App\Http\Controllers\Api\TradersEnterpriseController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -34,6 +35,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/mobile-shop/purchases', [MobileShopEnterpriseController::class, 'purchase'])->middleware('throttle:120,1');
     Route::post('/general-store/sales', [GeneralStoreEnterpriseController::class, 'sale'])->middleware('throttle:120,1');
     Route::post('/general-store/purchases', [GeneralStoreEnterpriseController::class, 'purchase'])->middleware('throttle:120,1');
+    Route::post('/traders/sales', [TradersEnterpriseController::class, 'sale'])->middleware('throttle:120,1');
+    Route::post('/traders/recoveries', [TradersEnterpriseController::class, 'recovery'])->middleware('throttle:120,1');
+    Route::post('/traders/delivery-challans', [TradersEnterpriseController::class, 'challan'])->middleware('throttle:120,1');
     Route::get('/mobile-shop/imeis/search', [MobileShopEnterpriseController::class, 'searchImei'])->middleware('throttle:120,1');
     Route::post('/mobile-shop/warranty-claims', [MobileShopEnterpriseController::class, 'warrantyClaim'])->middleware('throttle:60,1');
     Route::post('/mobile-shop/sale-returns', [MobileShopEnterpriseController::class, 'saleReturn'])->middleware('throttle:60,1');
@@ -55,7 +59,11 @@ Route::middleware('auth:sanctum')->group(function () {
         'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports',
         'hospital-bills', 'hospital-bill-items', 'master-catalogs', 'licenses',
         'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
-        'sale-return-items', 'purchase-returns', 'purchase-return-items', 'audit-logs'
+        'sale-return-items', 'purchase-returns', 'purchase-return-items',
+        'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
+        'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
+        'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
+        'audit-logs'
     ] as $resource) {
         Route::apiResource($resource, ResourceController::class)->parameters([$resource => 'id']);
     }

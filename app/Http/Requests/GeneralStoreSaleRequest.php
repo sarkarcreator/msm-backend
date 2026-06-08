@@ -10,6 +10,6 @@ class GeneralStoreSaleRequest extends MobileShopSaleRequest
         $type = strtolower(str_replace([' ', '-'], '_', (string) $user?->business_type));
 
         return (bool) $user?->license_uuid
-            && in_array($type, ['general_store', 'grocery_store', 'shopping_mall', 'traders', 'retail_shop'], true);
+            && in_array($type, ['general_store', 'grocery_store', 'shopping_mall', 'retail_shop'], true);
     }
 }

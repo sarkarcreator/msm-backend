@@ -54,6 +54,16 @@ class SyncService
         'sale_return_items' => \App\Models\SaleReturnItem::class,
         'purchase_returns' => \App\Models\PurchaseReturn::class,
         'purchase_return_items' => \App\Models\PurchaseReturnItem::class,
+        'trader_companies' => \App\Models\TraderCompany::class,
+        'trader_brands' => \App\Models\TraderBrand::class,
+        'trader_territories' => \App\Models\TraderTerritory::class,
+        'trader_routes' => \App\Models\TraderRoute::class,
+        'trader_salesmen' => \App\Models\TraderSalesman::class,
+        'trader_retailers' => \App\Models\TraderRetailer::class,
+        'trader_delivery_challans' => \App\Models\TraderDeliveryChallan::class,
+        'trader_recoveries' => \App\Models\TraderRecovery::class,
+        'trader_salesman_ledgers' => \App\Models\TraderSalesmanLedger::class,
+        'trader_distributor_ledgers' => \App\Models\TraderDistributorLedger::class,
         'licenses' => \App\Models\License::class,
         'audit_logs' => \App\Models\AuditLog::class,
         'inventory_transactions' => \App\Models\InventoryTransaction::class,
@@ -69,6 +79,9 @@ class SyncService
         'hospital_bills', 'hospital_bill_items', 'master_catalogs',
         'imei_registry', 'imei_movements', 'warranty_claims', 'sale_returns',
         'sale_return_items', 'purchase_returns', 'purchase_return_items',
+        'trader_companies', 'trader_brands', 'trader_territories', 'trader_routes',
+        'trader_salesmen', 'trader_retailers', 'trader_delivery_challans',
+        'trader_recoveries', 'trader_salesman_ledgers', 'trader_distributor_ledgers',
     ];
 
     public function apply(string $deviceId, array $operations, ?User $actor = null): array

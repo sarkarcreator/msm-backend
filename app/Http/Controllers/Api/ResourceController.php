@@ -25,6 +25,9 @@ class ResourceController extends Controller
         'hospital-bills', 'hospital-bill-items', 'master-catalogs',
         'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
         'sale-return-items', 'purchase-returns', 'purchase-return-items',
+        'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
+        'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
+        'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
     ];
 
     private array $hospitalOnlyResources = [
@@ -37,6 +40,12 @@ class ResourceController extends Controller
     private array $mobileShopOnlyResources = [
         'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
         'sale-return-items', 'purchase-returns', 'purchase-return-items',
+    ];
+
+    private array $tradersOnlyResources = [
+        'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
+        'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
+        'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
     ];
 
     private array $models = [
@@ -81,6 +90,16 @@ class ResourceController extends Controller
         'sale-return-items' => \App\Models\SaleReturnItem::class,
         'purchase-returns' => \App\Models\PurchaseReturn::class,
         'purchase-return-items' => \App\Models\PurchaseReturnItem::class,
+        'trader-companies' => \App\Models\TraderCompany::class,
+        'trader-brands' => \App\Models\TraderBrand::class,
+        'trader-territories' => \App\Models\TraderTerritory::class,
+        'trader-routes' => \App\Models\TraderRoute::class,
+        'trader-salesmen' => \App\Models\TraderSalesman::class,
+        'trader-retailers' => \App\Models\TraderRetailer::class,
+        'trader-delivery-challans' => \App\Models\TraderDeliveryChallan::class,
+        'trader-recoveries' => \App\Models\TraderRecovery::class,
+        'trader-salesman-ledgers' => \App\Models\TraderSalesmanLedger::class,
+        'trader-distributor-ledgers' => \App\Models\TraderDistributorLedger::class,
         'licenses' => \App\Models\License::class,
         'audit-logs' => \App\Models\AuditLog::class,
     ];
@@ -103,6 +122,20 @@ class ResourceController extends Controller
         $this->authorizeAccess($request);
         $payload = $this->payload($request);
         $payload['uuid'] ??= (string) Str::uuid();
+        $businessUuidColumns = [
+            'trader-companies' => 'company_uuid',
+            'trader-brands' => 'brand_uuid',
+            'trader-territories' => 'territory_uuid',
+            'trader-routes' => 'route_uuid',
+            'trader-salesmen' => 'salesman_uuid',
+            'trader-retailers' => 'retailer_uuid',
+            'trader-delivery-challans' => 'challan_uuid',
+            'trader-recoveries' => 'recovery_uuid',
+        ];
+        $resource = explode('.', $request->route()->getName())[0];
+        if (isset($businessUuidColumns[$resource]) && blank($payload[$businessUuidColumns[$resource]] ?? null)) {
+            $payload[$businessUuidColumns[$resource]] = $payload['uuid'];
+        }
         $record = $this->storeRecord($request, $payload);
         $this->audit($request, 'create', $record->uuid, $payload);
 
@@ -407,6 +440,9 @@ class ResourceController extends Controller
                 'hospital-bill-items', 'master-catalogs', 'imei-registry',
                 'imei-movements', 'warranty-claims', 'sale-returns', 'sale-return-items',
                 'purchase-returns', 'purchase-return-items',
+                'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
+                'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
+                'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
             ],
             'Manager' => [
                 'products', 'categories', 'brands', 'customers', 'customer-ledgers',
@@ -418,6 +454,9 @@ class ResourceController extends Controller
                 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs',
                 'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
                 'sale-return-items', 'purchase-returns', 'purchase-return-items',
+                'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
+                'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
+                'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
             ],
             'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications', 'master-catalogs'],
             'Hospital Owner' => ['patients', 'assistants', 'users', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
@@ -430,7 +469,7 @@ class ResourceController extends Controller
             'Lab Technician' => ['lab-reports', 'hospital-tasks', 'notifications'],
             'X-Ray Technician' => ['radiology-reports', 'hospital-tasks', 'notifications'],
             'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'patients', 'notifications'],
-            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs', 'imei-registry', 'warranty-claims', 'sale-returns', 'sale-return-items'],
+            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs', 'imei-registry', 'warranty-claims', 'sale-returns', 'sale-return-items', 'trader-retailers', 'trader-recoveries'],
             default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
         };
 
@@ -448,6 +487,11 @@ class ResourceController extends Controller
 
             if ($businessType !== 'Mobile Shop') {
                 abort_if(in_array($resource, $this->mobileShopOnlyResources, true), 403, 'This module is only available for mobile shop licenses.');
+            }
+
+            $normalizedBusinessType = strtolower(str_replace([' ', '-'], '_', $businessType));
+            if ($normalizedBusinessType !== 'traders') {
+                abort_if(in_array($resource, $this->tradersOnlyResources, true), 403, 'This module is only available for traders licenses.');
             }
         }
     }
