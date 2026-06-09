@@ -48,6 +48,18 @@ class BarcodeRegistryService
             }
         }
 
+        $packagingMatch = $this->findPackagingProduct($term, $actor);
+        if ($packagingMatch) {
+            return $this->withResults([
+                'match_type' => 'packaging:'.$packagingMatch['unit']['key'],
+                'scan' => $scan,
+                'product' => $packagingMatch['product'],
+                'imei' => null,
+                'packaging_unit' => $packagingMatch['unit'],
+                'quantity_multiplier' => $packagingMatch['unit']['factor'],
+            ], $term, $actor, $limit);
+        }
+
         if ($this->isMobileShop($actor) && Schema::hasTable('imei_registry')) {
             $imei = $this->findImei($term, $actor);
             if ($imei) {
@@ -139,6 +151,10 @@ class BarcodeRegistryService
             $this->pushResult($results, $seen, $field, $product, null, $this->quantityMultiplier($field, $product));
         }
 
+        foreach ($this->exactPackagingMatches($term, $actor) as $match) {
+            $this->pushResult($results, $seen, 'packaging:'.$match['unit']['key'], $match['product'], null, $match['unit']['factor'], $match['unit']);
+        }
+
         if ($this->isMobileShop($actor) && Schema::hasTable('imei_registry')) {
             $imei = $this->findImei($term, $actor);
             if ($imei) {
@@ -180,6 +196,7 @@ class BarcodeRegistryService
             $quantity = max(1, (int) ($payload['quantity'] ?? 1));
             $scan = $payload['scan'] ?? $payload['barcode'] ?? null;
             $productUuid = $payload['product_uuid'] ?? null;
+            $matchedUnit = null;
 
             $product = $productUuid
                 ? Product::where('license_uuid', $actor->license_uuid)->where('uuid', $productUuid)->lockForUpdate()->first()
@@ -188,6 +205,7 @@ class BarcodeRegistryService
             if (! $product && $scan) {
                 $match = $this->lookup($scan, $actor);
                 $product = $match['product'] ?? null;
+                $matchedUnit = $match['packaging_unit'] ?? null;
                 $quantity *= (int) ($match['quantity_multiplier'] ?? 1);
             }
 
@@ -211,7 +229,7 @@ class BarcodeRegistryService
 
             $product->update($update);
 
-            $transaction = InventoryTransaction::create([
+            $transactionPayload = [
                 'uuid' => (string) Str::uuid(),
                 'license_uuid' => $actor->license_uuid,
                 'business_type' => $actor->business_type,
@@ -220,10 +238,15 @@ class BarcodeRegistryService
                 'product_name' => $product->product_name,
                 'type' => 'Stock In',
                 'quantity' => $quantity,
+                'selected_unit' => $matchedUnit['unit'] ?? $payload['selected_unit'] ?? null,
+                'selected_unit_label' => $matchedUnit['label'] ?? $payload['selected_unit_label'] ?? null,
+                'conversion_factor' => $matchedUnit['factor'] ?? $payload['conversion_factor'] ?? null,
+                'unit_barcode' => $matchedUnit['barcode'] ?? $payload['unit_barcode'] ?? null,
                 'reference' => $payload['reference'] ?? $payload['invoice_number'] ?? 'BARCODE-RECEIVE',
                 'reason' => $payload['reason'] ?? 'Barcode Receiving',
                 'transacted_at' => now(),
-            ]);
+            ];
+            $transaction = InventoryTransaction::create(array_intersect_key($transactionPayload, array_flip(Schema::getColumnListing('inventory_transactions'))));
 
             $this->queue($actor, 'products', 'update', $product->fresh());
             $this->queue($actor, 'inventory_transactions', 'create', $transaction);
@@ -292,18 +315,22 @@ class BarcodeRegistryService
         return $payload;
     }
 
-    private function pushResult(array &$results, array &$seen, string $matchType, ?Product $product, ?ImeiRegistry $imei, int $quantityMultiplier): void
+    private function pushResult(array &$results, array &$seen, string $matchType, ?Product $product, ?ImeiRegistry $imei, int $quantityMultiplier, ?array $packagingUnit = null): void
     {
         if (! $product?->uuid || isset($seen[$product->uuid.':'.$matchType])) {
             return;
         }
         $seen[$product->uuid.':'.$matchType] = true;
-        $results[] = [
+        $payload = [
             'match_type' => $matchType,
             'product' => $product,
             'imei' => $imei,
             'quantity_multiplier' => $quantityMultiplier,
         ];
+        if ($packagingUnit) {
+            $payload['packaging_unit'] = $packagingUnit;
+        }
+        $results[] = $payload;
     }
 
     private function findImei(string $term, User $actor): ?ImeiRegistry
@@ -370,6 +397,86 @@ class BarcodeRegistryService
         }
 
         return 1;
+    }
+
+    private function findPackagingProduct(string $term, User $actor): ?array
+    {
+        foreach ($this->exactPackagingMatches($term, $actor) as $match) {
+            return $match;
+        }
+        return null;
+    }
+
+    private function exactPackagingMatches(string $term, User $actor): array
+    {
+        if (! Schema::hasColumn('products', 'packaging_units')) {
+            return [];
+        }
+
+        $matches = [];
+        Product::where('license_uuid', $actor->license_uuid)
+            ->whereNotNull('packaging_units')
+            ->chunkById(200, function ($products) use ($term, &$matches) {
+                foreach ($products as $product) {
+                    foreach ($this->packagingUnits($product) as $unit) {
+                        if (($unit['barcode'] ?? '') !== '' && $this->normalize($unit['barcode']) === $term) {
+                            $matches[] = ['product' => $product, 'unit' => $unit];
+                        }
+                    }
+                }
+            });
+
+        return $matches;
+    }
+
+    private function packagingUnits(Product $product): array
+    {
+        $baseUnit = in_array((string) ($product->unit ?? ''), ['', 'Single Unit', 'Unit'], true)
+            ? (string) ($product->variant_type ?? 'Piece')
+            : (string) $product->unit;
+        $raw = $product->packaging_units;
+        $decoded = is_array($raw) ? $raw : json_decode((string) $raw, true);
+        $rows = is_array($decoded) ? array_values($decoded) : [];
+        $indexed = [];
+
+        foreach ($rows as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $key = Str::of((string) ($row['key'] ?? $row['unit'] ?? $row['label'] ?? 'level_'.($index + 1)))->lower()->replace(' ', '_')->toString();
+            $indexed[$key] = array_merge($row, [
+                'key' => $key,
+                'parent_key' => Str::of((string) ($row['parent_key'] ?? $row['parent'] ?? $row['contains_unit'] ?? 'base'))->lower()->replace(' ', '_')->toString(),
+                'conversion_quantity' => max(1, (int) ($row['conversion_quantity'] ?? $row['contains'] ?? $row['factor'] ?? $row['conversion_factor'] ?? 1)),
+            ]);
+        }
+
+        $factorFor = function (array $row, array $seen = []) use (&$factorFor, &$indexed): int {
+            if (($row['key'] ?? 'base') === 'base' || in_array($row['key'], $seen, true)) {
+                return 1;
+            }
+            $seen[] = $row['key'];
+            $parent = ($row['parent_key'] ?? 'base') === 'base' ? null : ($indexed[$row['parent_key']] ?? null);
+            $parentFactor = $parent ? $factorFor($parent, $seen) : 1;
+            return max(1, (int) ($row['conversion_quantity'] ?? 1)) * $parentFactor;
+        };
+
+        return array_map(function (array $row) use ($factorFor, $baseUnit) {
+            $factor = $factorFor($row);
+            return [
+                'key' => $row['key'],
+                'unit' => $row['unit'] ?? $row['label'] ?? $row['key'],
+                'label' => $row['label'] ?? (($row['unit'] ?? $row['key'])." ({$factor} ".$this->pluralUnit($baseUnit).')'),
+                'barcode' => $row['barcode'] ?? $row['code'] ?? '',
+                'factor' => $factor,
+            ];
+        }, array_values($indexed));
+    }
+
+    private function pluralUnit(string $unit): string
+    {
+        $text = trim(preg_replace('/\s*\(.*/', '', $unit) ?: 'Piece');
+        return str_ends_with(strtolower($text), 's') ? $text : $text.'s';
     }
 
     private function queue(User $actor, string $entity, string $action, $model): void
