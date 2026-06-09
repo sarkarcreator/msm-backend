@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Role;
+use App\Services\BarcodeRegistryService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -136,6 +137,9 @@ class ResourceController extends Controller
         if (isset($businessUuidColumns[$resource]) && blank($payload[$businessUuidColumns[$resource]] ?? null)) {
             $payload[$businessUuidColumns[$resource]] = $payload['uuid'];
         }
+        if ($resource === 'products') {
+            app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), null);
+        }
         $record = $this->storeRecord($request, $payload);
         $this->audit($request, 'create', $record->uuid, $payload);
 
@@ -158,6 +162,9 @@ class ResourceController extends Controller
             ->firstOrFail();
         $payload = $this->payload($request, true);
         $this->guardStatusTransition($record, $payload);
+        if (explode('.', $request->route()->getName())[0] === 'products') {
+            app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), $record->uuid);
+        }
         $record->update($payload);
         $this->audit($request, 'update', $record->uuid, $payload);
 
