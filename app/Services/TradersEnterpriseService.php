@@ -50,13 +50,14 @@ class TradersEnterpriseService
                     throw ValidationException::withMessages(['product_uuid' => 'Product not found in this traders inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
-                if ((int) $product->quantity < $quantity) {
+                $stockQuantity = max(1, (int) ($item['stock_quantity'] ?? ($quantity * max(1, (int) ($item['conversion_factor'] ?? 1)))));
+                if ((int) $product->quantity < $stockQuantity) {
                     throw ValidationException::withMessages(['stock' => "{$product->product_name} stock is not enough."]);
                 }
                 $price = (float) ($item['price'] ?? $product->sale_price ?? 0);
                 $subtotal += $quantity * $price;
-                $profit += ($price - (float) ($product->purchase_price ?? 0)) * $quantity;
-                $lines[] = compact('product', 'item', 'quantity', 'price');
+                $profit += ($quantity * $price) - ((float) ($product->purchase_price ?? 0) * $stockQuantity);
+                $lines[] = compact('product', 'item', 'quantity', 'stockQuantity', 'price');
             }
 
             $discount = (float) ($payload['discount'] ?? 0);
@@ -108,7 +109,7 @@ class TradersEnterpriseService
                 /** @var Product $product */
                 $product = $line['product'];
                 $product->update([
-                    'quantity' => max(0, (int) $product->quantity - $line['quantity']),
+                    'quantity' => max(0, (int) $product->quantity - $line['stockQuantity']),
                     'revision' => ((int) ($product->revision ?? 1)) + 1,
                 ]);
                 $saleItems[] = $this->createRecord(new SaleItem(), [
@@ -123,11 +124,16 @@ class TradersEnterpriseService
                     'brand' => $product->brand,
                     'company_name' => $product->company_name ?? null,
                     'quantity' => $line['quantity'],
+                    'stock_quantity' => $line['stockQuantity'],
+                    'selected_unit' => $line['item']['selected_unit'] ?? null,
+                    'selected_unit_label' => $line['item']['selected_unit_label'] ?? null,
+                    'conversion_factor' => $line['item']['conversion_factor'] ?? null,
+                    'unit_barcode' => $line['item']['unit_barcode'] ?? null,
                     'price' => $line['price'],
                     'total' => $line['quantity'] * $line['price'],
-                    'profit' => ($line['price'] - (float) ($product->purchase_price ?? 0)) * $line['quantity'],
+                    'profit' => ($line['price'] * $line['quantity']) - ((float) ($product->purchase_price ?? 0) * $line['stockQuantity']),
                 ]);
-                $inventoryTransactions[] = $this->inventory($actor, $product, 'Stock Out', -$line['quantity'], $sale->invoice_number, 'Traders Sale');
+                $inventoryTransactions[] = $this->inventory($actor, $product, 'Stock Out', -$line['stockQuantity'], $sale->invoice_number, 'Traders Sale', $line['item'] ?? []);
             }
 
             $salesmanLedger = $salesman ? $this->salesmanLedger($actor, $salesman, 'Sale', $total, 0, $commission, $sale->invoice_number) : null;
@@ -279,7 +285,7 @@ class TradersEnterpriseService
         return $model->newQuery()->create($payload);
     }
 
-    private function inventory(User $actor, Product $product, string $type, int $quantity, string $reference, string $reason): InventoryTransaction
+    private function inventory(User $actor, Product $product, string $type, int $quantity, string $reference, string $reason, array $item = []): InventoryTransaction
     {
         return $this->createRecord(new InventoryTransaction(), [
             'uuid' => (string) Str::uuid(),
@@ -290,6 +296,9 @@ class TradersEnterpriseService
             'product_name' => $product->product_name,
             'type' => $type,
             'quantity' => $quantity,
+            'selected_unit' => $item['selected_unit'] ?? null,
+            'selected_unit_label' => $item['selected_unit_label'] ?? null,
+            'conversion_factor' => $item['conversion_factor'] ?? null,
             'reference' => $reference,
             'reason' => $reason,
             'transacted_at' => now(),

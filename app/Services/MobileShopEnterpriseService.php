@@ -59,15 +59,16 @@ class MobileShopEnterpriseService
                     throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
-                if ((int) $product->quantity < $quantity) {
+                $stockQuantity = max(1, (int) ($item['stock_quantity'] ?? ($quantity * max(1, (int) ($item['conversion_factor'] ?? 1)))));
+                if ((int) $product->quantity < $stockQuantity) {
                     throw ValidationException::withMessages(['stock' => "{$product->product_name} stock is not enough."]);
                 }
 
                 $imei = $this->isMobileShopTenant($actor) ? $this->resolveImeiForSale($item, $product, $actor) : null;
                 $price = (float) ($item['price'] ?? $product->sale_price ?? 0);
                 $subtotal += $quantity * $price;
-                $profit += ($price - (float) ($product->purchase_price ?? 0)) * $quantity;
-                $saleItems[] = compact('product', 'imei', 'quantity', 'price', 'item');
+                $profit += ($quantity * $price) - ((float) ($product->purchase_price ?? 0) * $stockQuantity);
+                $saleItems[] = compact('product', 'imei', 'quantity', 'stockQuantity', 'price', 'item');
             }
 
             $discount = (float) ($payload['discount'] ?? 0);
@@ -114,7 +115,7 @@ class MobileShopEnterpriseService
                 $imei = $line['imei'];
                 $imeiNumbers = $this->isMobileShopTenant($actor) ? $this->imeiNumbersFromItem($line['item'] ?? [], $product) : [];
                 $product->update([
-                    'quantity' => max(0, (int) $product->quantity - $line['quantity']),
+                    'quantity' => max(0, (int) $product->quantity - $line['stockQuantity']),
                     'revision' => ((int) ($product->revision ?? 1)) + 1,
                 ]);
 
@@ -135,11 +136,16 @@ class MobileShopEnterpriseService
                     'serial_number' => $mobileImeiTracking ? ($imei?->serial_number ?? $product->serial_number ?? null) : null,
                     'imei' => $mobileImeiTracking ? ($imei?->imei_1 ?? $product->imei ?? null) : null,
                     'quantity' => $line['quantity'],
+                    'stock_quantity' => $line['stockQuantity'],
+                    'selected_unit' => $line['item']['selected_unit'] ?? null,
+                    'selected_unit_label' => $line['item']['selected_unit_label'] ?? null,
+                    'conversion_factor' => $line['item']['conversion_factor'] ?? null,
+                    'unit_barcode' => $line['item']['unit_barcode'] ?? null,
                     'price' => $line['price'],
-                    'profit' => ($line['price'] - (float) ($product->purchase_price ?? 0)) * $line['quantity'],
+                    'profit' => ($line['price'] * $line['quantity']) - ((float) ($product->purchase_price ?? 0) * $line['stockQuantity']),
                 ]);
                 $createdItems[] = $saleItem;
-                $this->inventory($actor, $product, 'Stock Out', -$line['quantity'], $sale->invoice_number, 'Sale');
+                $this->inventory($actor, $product, 'Stock Out', -$line['stockQuantity'], $sale->invoice_number, 'Sale', $line['item'] ?? []);
                 if ($imei) {
                     $createdMovements[] = $this->moveImei($actor, $imei, 'Sale', $sale->invoice_number, 'Sold', [
                         'sale_id' => $sale->id,
@@ -227,10 +233,11 @@ class MobileShopEnterpriseService
                     throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
+                $stockQuantity = max(1, (int) ($item['stock_quantity'] ?? ($quantity * max(1, (int) ($item['conversion_factor'] ?? 1)))));
                 $cost = (float) ($item['cost_price'] ?? $item['purchase_price'] ?? 0);
                 $product->update([
                     'purchase_price' => $cost,
-                    'quantity' => (int) $product->quantity + $quantity,
+                    'quantity' => (int) $product->quantity + $stockQuantity,
                     'revision' => ((int) ($product->revision ?? 1)) + 1,
                 ]);
                 $purchaseItem = $this->createRecord(new PurchaseItem(), [
@@ -243,11 +250,16 @@ class MobileShopEnterpriseService
                     'product_uuid' => $product->uuid,
                     'product_name' => $product->product_name,
                     'quantity' => $quantity,
+                    'stock_quantity' => $stockQuantity,
+                    'selected_unit' => $item['selected_unit'] ?? null,
+                    'selected_unit_label' => $item['selected_unit_label'] ?? null,
+                    'conversion_factor' => $item['conversion_factor'] ?? null,
+                    'unit_barcode' => $item['unit_barcode'] ?? null,
                     'purchase_price' => $cost,
                     'cost_price' => $cost,
                 ]);
                 $createdItems[] = $purchaseItem;
-                $this->inventory($actor, $product, 'Stock In', $quantity, $purchase->invoice_number, 'Purchase');
+                $this->inventory($actor, $product, 'Stock In', $stockQuantity, $purchase->invoice_number, 'Purchase', $item);
                 if ($this->isMobileShopTenant($actor)) {
                     foreach ($this->imeiRowsFromItem($item) as $imeiRow) {
                         $imei = $this->createImei($actor, $product, $imeiRow);
@@ -655,7 +667,7 @@ class MobileShopEnterpriseService
         ]));
     }
 
-    private function inventory(User $actor, Product $product, string $type, int $quantity, string $reference, string $reason): void
+    private function inventory(User $actor, Product $product, string $type, int $quantity, string $reference, string $reason, array $item = []): void
     {
         $this->createRecord(new InventoryTransaction(), [
             'uuid' => (string) Str::uuid(),
@@ -666,6 +678,9 @@ class MobileShopEnterpriseService
             'product_name' => $product->product_name,
             'type' => $type,
             'quantity' => $quantity,
+            'selected_unit' => $item['selected_unit'] ?? null,
+            'selected_unit_label' => $item['selected_unit_label'] ?? null,
+            'conversion_factor' => $item['conversion_factor'] ?? null,
             'reference' => $reference,
             'reason' => $reason,
             'transacted_at' => now(),

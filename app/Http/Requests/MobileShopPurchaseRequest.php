@@ -24,6 +24,11 @@ class MobileShopPurchaseRequest extends FormRequest
             'items' => ['required_without:cart', 'array', 'min:1'],
             'cart.*.product_uuid' => ['required_with:cart', 'string', 'max:80'],
             'cart.*.quantity' => ['required_with:cart', 'integer', 'min:1'],
+            'cart.*.stock_quantity' => ['nullable', 'integer', 'min:1'],
+            'cart.*.selected_unit' => ['nullable', 'string', 'max:80'],
+            'cart.*.selected_unit_label' => ['nullable', 'string', 'max:190'],
+            'cart.*.conversion_factor' => ['nullable', 'numeric', 'min:1'],
+            'cart.*.unit_barcode' => ['nullable', 'string', 'max:190'],
             'cart.*.cost_price' => ['nullable', 'numeric', 'min:0'],
             'cart.*.purchase_price' => ['nullable', 'numeric', 'min:0'],
             'cart.*.imei' => ['nullable', 'string', 'max:80'],
@@ -34,6 +39,11 @@ class MobileShopPurchaseRequest extends FormRequest
             'cart.*.imeis' => ['nullable'],
             'items.*.product_uuid' => ['required_with:items', 'string', 'max:80'],
             'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
+            'items.*.stock_quantity' => ['nullable', 'integer', 'min:1'],
+            'items.*.selected_unit' => ['nullable', 'string', 'max:80'],
+            'items.*.selected_unit_label' => ['nullable', 'string', 'max:190'],
+            'items.*.conversion_factor' => ['nullable', 'numeric', 'min:1'],
+            'items.*.unit_barcode' => ['nullable', 'string', 'max:190'],
             'items.*.imei_numbers' => ['nullable'],
         ];
     }
