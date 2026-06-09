@@ -21,17 +21,31 @@ class BarcodeRegistryService
         'barcode',
         'secondary_barcode',
         'qr_code',
+        'product_code',
         'sku',
         'box_barcode',
         'carton_barcode',
     ];
 
-    public function lookup(string $scan, User $actor): array
+    public function lookup(string $scan, User $actor, int $limit = 0): array
     {
         $this->assertTenant($actor);
         $term = $this->normalize($scan);
         if ($term === '') {
             throw ValidationException::withMessages(['scan' => 'Barcode, QR, SKU or product name is required.']);
+        }
+
+        foreach (['barcode', 'secondary_barcode', 'qr_code'] as $field) {
+            $product = $this->findProductByField($field, $term, $actor);
+            if ($product) {
+                return $this->withResults([
+                    'match_type' => $field,
+                    'scan' => $scan,
+                    'product' => $product,
+                    'imei' => null,
+                    'quantity_multiplier' => $this->quantityMultiplier($field, $product),
+                ], $term, $actor, $limit);
+            }
         }
 
         if ($this->isMobileShop($actor) && Schema::hasTable('imei_registry')) {
@@ -41,69 +55,121 @@ class BarcodeRegistryService
                     ? Product::where('license_uuid', $actor->license_uuid)->where('uuid', $imei->product_uuid)->first()
                     : null;
 
-                return [
+                return $this->withResults([
                     'match_type' => 'imei',
                     'scan' => $scan,
                     'product' => $product,
                     'imei' => $imei,
                     'quantity_multiplier' => 1,
-                ];
+                ], $term, $actor, $limit);
             }
         }
 
-        foreach ($this->productLookupFields as $field) {
+        foreach (['sku', 'product_code', 'box_barcode', 'carton_barcode'] as $field) {
             $product = $this->findProductByField($field, $term, $actor);
             if ($product) {
-                return [
+                return $this->withResults([
                     'match_type' => $field,
                     'scan' => $scan,
                     'product' => $product,
                     'imei' => null,
                     'quantity_multiplier' => $this->quantityMultiplier($field, $product),
-                ];
+                ], $term, $actor, $limit);
             }
         }
 
         $product = Product::where('license_uuid', $actor->license_uuid)
-            ->where('product_name', 'like', "%{$term}%")
+            ->where(function ($query) use ($term) {
+                $query->where('product_name', 'like', "%{$term}%");
+                if (Schema::hasColumn('products', 'brand')) {
+                    $query->orWhere('brand', 'like', "%{$term}%");
+                }
+            })
             ->orderBy('product_name')
             ->first();
 
         if ($product) {
-            return [
-                'match_type' => 'product_name',
+            return $this->withResults([
+                'match_type' => stripos((string) $product->product_name, $term) !== false ? 'product_name' : 'brand',
                 'scan' => $scan,
                 'product' => $product,
                 'imei' => null,
                 'quantity_multiplier' => 1,
-            ];
+            ], $term, $actor, $limit);
         }
 
         $medicine = $this->findMedicine($term, $actor);
         if ($medicine) {
-            return [
+            return $this->withResults([
                 'match_type' => 'medicine_master',
                 'scan' => $scan,
                 'product' => null,
                 'medicine' => $medicine,
                 'imei' => null,
                 'quantity_multiplier' => 1,
-            ];
+            ], $term, $actor, $limit);
         }
 
         $catalog = $this->findCatalog($term, $actor);
         if ($catalog) {
-            return [
+            return $this->withResults([
                 'match_type' => 'master_catalog',
                 'scan' => $scan,
                 'product' => null,
                 'catalog' => $catalog,
                 'imei' => null,
                 'quantity_multiplier' => $this->quantityMultiplier('catalog', $catalog),
-            ];
+            ], $term, $actor, $limit);
         }
 
         throw ValidationException::withMessages(['scan' => 'No product found for this scan.']);
+    }
+
+    public function suggestions(string $scan, User $actor, int $limit = 8): array
+    {
+        $this->assertTenant($actor);
+        $term = $this->normalize($scan);
+        if ($term === '') {
+            return [];
+        }
+
+        $seen = [];
+        $results = [];
+        foreach ($this->exactProductMatches($term, $actor) as $field => $product) {
+            $this->pushResult($results, $seen, $field, $product, null, $this->quantityMultiplier($field, $product));
+        }
+
+        if ($this->isMobileShop($actor) && Schema::hasTable('imei_registry')) {
+            $imei = $this->findImei($term, $actor);
+            if ($imei) {
+                $product = $imei->product_uuid
+                    ? Product::where('license_uuid', $actor->license_uuid)->where('uuid', $imei->product_uuid)->first()
+                    : null;
+                $this->pushResult($results, $seen, 'imei', $product, $imei, 1);
+            }
+        }
+
+        $query = Product::where('license_uuid', $actor->license_uuid)
+            ->where(function ($builder) use ($term) {
+                foreach (['product_name', 'brand', 'category', 'sku', 'product_code'] as $field) {
+                    if (Schema::hasColumn('products', $field)) {
+                        $builder->orWhere($field, 'like', "%{$term}%");
+                    }
+                }
+            })
+            ->orderByRaw("CASE WHEN product_name = ? THEN 0 WHEN product_name LIKE ? THEN 1 ELSE 2 END", [$term, "{$term}%"])
+            ->orderBy('product_name')
+            ->limit($limit * 2);
+
+        foreach ($query->get() as $product) {
+            $match = stripos((string) $product->product_name, $term) !== false ? 'product_name' : 'brand';
+            $this->pushResult($results, $seen, $match, $product, null, 1);
+            if (count($results) >= $limit) {
+                break;
+            }
+        }
+
+        return array_slice($results, 0, $limit);
     }
 
     public function receive(array $payload, User $actor): array
@@ -206,6 +272,40 @@ class BarcodeRegistryService
             ->first();
     }
 
+    private function exactProductMatches(string $term, User $actor): array
+    {
+        $matches = [];
+        foreach (['barcode', 'secondary_barcode', 'qr_code', 'sku', 'product_code', 'box_barcode', 'carton_barcode'] as $field) {
+            $product = $this->findProductByField($field, $term, $actor);
+            if ($product) {
+                $matches[$field] = $product;
+            }
+        }
+        return $matches;
+    }
+
+    private function withResults(array $payload, string $term, User $actor, int $limit): array
+    {
+        if ($limit > 0) {
+            $payload['results'] = $this->suggestions($term, $actor, $limit);
+        }
+        return $payload;
+    }
+
+    private function pushResult(array &$results, array &$seen, string $matchType, ?Product $product, ?ImeiRegistry $imei, int $quantityMultiplier): void
+    {
+        if (! $product?->uuid || isset($seen[$product->uuid.':'.$matchType])) {
+            return;
+        }
+        $seen[$product->uuid.':'.$matchType] = true;
+        $results[] = [
+            'match_type' => $matchType,
+            'product' => $product,
+            'imei' => $imei,
+            'quantity_multiplier' => $quantityMultiplier,
+        ];
+    }
+
     private function findImei(string $term, User $actor): ?ImeiRegistry
     {
         return ImeiRegistry::where('license_uuid', $actor->license_uuid)
@@ -248,7 +348,7 @@ class BarcodeRegistryService
                 $query->where('business_type', $actor->business_type)->orWhere('business_type', 'All');
             })
             ->where(function ($query) use ($term) {
-                foreach (['barcode', 'secondary_barcode', 'qr_code', 'product_name', 'name'] as $field) {
+                foreach (['barcode', 'secondary_barcode', 'qr_code', 'product_code', 'brand', 'product_name', 'name'] as $field) {
                     if (! Schema::hasColumn('master_catalogs', $field)) {
                         continue;
                     }

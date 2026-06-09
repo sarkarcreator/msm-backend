@@ -16,9 +16,10 @@ class BarcodeController extends Controller
     {
         $payload = $request->validate([
             'q' => ['required', 'string', 'max:255'],
+            'limit' => ['nullable', 'integer', 'min:0', 'max:25'],
         ]);
 
-        return response()->json($this->barcodes->lookup($payload['q'], $request->user()));
+        return response()->json($this->barcodes->lookup($payload['q'], $request->user(), (int) ($payload['limit'] ?? 0)));
     }
 
     public function receive(Request $request)
