@@ -189,9 +189,7 @@ class ResourceController extends Controller
 
         try {
             DB::transaction(function () use ($request, $record, $resource, $uuid, $payload, $force) {
-                if ($force) {
-                    $this->deleteBlockingRelations($request, $resource, $record, $force);
-                }
+                $this->deleteBlockingRelations($request, $resource, $record, $force);
 
                 $force ? $record->forceDelete() : $record->delete();
                 if ($resource === 'licenses') {
@@ -247,6 +245,37 @@ class ResourceController extends Controller
                 'sale_id' => $record->id,
                 'sale_uuid' => $record->uuid,
             ]);
+        }
+
+        if ($resource === 'purchases') {
+            $this->deleteRows($request, 'purchase-items', \App\Models\PurchaseItem::class, [
+                'purchase_id' => $record->id,
+                'purchase_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'purchase-returns', \App\Models\PurchaseReturn::class, [
+                'purchase_id' => $record->id,
+                'purchase_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'supplier-ledgers', \App\Models\SupplierLedger::class, [
+                'reference' => $record->uuid,
+            ], $force);
+            $this->deleteRows($request, 'cashbook', \App\Models\CashbookEntry::class, [
+                'reference' => $record->uuid,
+            ], $force);
+        }
+
+        if ($resource === 'customers') {
+            $this->deleteRows($request, 'customer-ledgers', \App\Models\CustomerLedger::class, [
+                'customer_id' => $record->id,
+                'customer_uuid' => $record->uuid,
+            ], $force);
+        }
+
+        if ($resource === 'suppliers') {
+            $this->deleteRows($request, 'supplier-ledgers', \App\Models\SupplierLedger::class, [
+                'supplier_id' => $record->id,
+                'supplier_uuid' => $record->uuid,
+            ], $force);
         }
 
         if ($resource === 'products') {
