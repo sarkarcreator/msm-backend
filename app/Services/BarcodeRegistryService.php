@@ -469,6 +469,8 @@ class BarcodeRegistryService
                 'label' => $row['label'] ?? (($row['unit'] ?? $row['key'])." ({$factor} ".$this->pluralUnit($baseUnit).')'),
                 'barcode' => $row['barcode'] ?? $row['code'] ?? '',
                 'factor' => $factor,
+                'sale_price' => (float) ($row['sale_price'] ?? $row['price'] ?? (($product->sale_price ?? 0) * $factor)),
+                'purchase_price' => (float) ($row['purchase_price'] ?? $row['cost_price'] ?? (($product->purchase_price ?? 0) * $factor)),
             ];
         }, array_values($indexed));
     }
