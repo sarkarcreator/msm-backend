@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Role;
 use App\Services\BarcodeRegistryService;
+use App\Services\BusinessTypeService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -513,22 +514,7 @@ class ResourceController extends Controller
 
         if ($role !== 'Super Admin') {
             $businessType = $request->user()?->business_type ?: 'General Store';
-            if ($businessType !== 'Hospital') {
-                abort_if(in_array($resource, $this->hospitalOnlyResources, true), 403, 'This module is only available for hospital licenses.');
-            }
-
-            if (! in_array($businessType, ['Mobile Shop', 'Electronics Store'], true)) {
-                abort_if(in_array($resource, $this->repairOnlyResources, true), 403, 'This module is only available for repair-enabled licenses.');
-            }
-
-            if ($businessType !== 'Mobile Shop') {
-                abort_if(in_array($resource, $this->mobileShopOnlyResources, true), 403, 'This module is only available for mobile shop licenses.');
-            }
-
-            $normalizedBusinessType = strtolower(str_replace([' ', '-'], '_', $businessType));
-            if ($normalizedBusinessType !== 'traders') {
-                abort_if(in_array($resource, $this->tradersOnlyResources, true), 403, 'This module is only available for traders licenses.');
-            }
+            abort_unless(app(BusinessTypeService::class)->allowsResource($businessType, $resource), 403, 'This module is not available for this business type.');
         }
     }
 
