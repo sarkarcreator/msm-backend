@@ -277,6 +277,13 @@ class BarcodeRegistryService
                 ->first();
 
             if ($duplicate) {
+                \Log::warning('Product duplicate identity blocked', [
+                    'license_uuid' => $actor->license_uuid,
+                    'field' => $field,
+                    'value' => $value,
+                    'existing_product_uuid' => $duplicate->uuid,
+                    'incoming_product_uuid' => $ignoreUuid,
+                ]);
                 throw ValidationException::withMessages([
                     $field => "Duplicate {$field} already assigned to {$duplicate->product_name}.",
                 ]);
