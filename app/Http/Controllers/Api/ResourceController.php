@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Role;
 use App\Services\BarcodeRegistryService;
-use App\Services\BusinessTypeService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -514,8 +513,40 @@ class ResourceController extends Controller
 
         if ($role !== 'Super Admin') {
             $businessType = $request->user()?->business_type ?: 'General Store';
-            abort_unless(app(BusinessTypeService::class)->allowsResource($businessType, $resource), 403, 'This module is not available for this business type.');
+            abort_unless($this->businessTypeAllowsResource($businessType, $resource), 403, 'This module is not available for this business type.');
         }
+    }
+
+    private function businessTypeAllowsResource(string $businessType, string $resource): bool
+    {
+        $key = strtolower(str_replace([' ', '-'], '_', trim($businessType)));
+        $key = match ($key) {
+            'mobile', 'mobile_shop' => 'mobile_shop',
+            'hospital' => 'hospital',
+            'pharmacy' => 'pharmacy',
+            'traders' => 'traders',
+            'electronics_store' => 'electronics_store',
+            'general_store', 'grocery_store', 'grocery', 'shopping_mall', 'retail_shop' => 'general_store',
+            default => 'generic_shop',
+        };
+
+        if ($key !== 'hospital' && in_array($resource, $this->hospitalOnlyResources, true)) {
+            return false;
+        }
+
+        if ($key !== 'mobile_shop' && in_array($resource, $this->mobileShopOnlyResources, true)) {
+            return false;
+        }
+
+        if (! in_array($key, ['mobile_shop', 'electronics_store'], true) && in_array($resource, $this->repairOnlyResources, true)) {
+            return false;
+        }
+
+        if ($key !== 'traders' && in_array($resource, $this->tradersOnlyResources, true)) {
+            return false;
+        }
+
+        return true;
     }
 
     private function payload(Request $request, bool $updating = false): array
