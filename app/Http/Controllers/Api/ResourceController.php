@@ -140,8 +140,14 @@ class ResourceController extends Controller
         if ($resource === 'products') {
             app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), $payload['uuid'] ?? null);
         }
-        $record = $this->storeRecord($request, $payload);
-        $this->audit($request, 'create', $record->uuid, $payload);
+        try {
+            $record = $this->storeRecord($request, $payload);
+            $this->audit($request, 'create', $record->uuid, $payload);
+        } catch (QueryException $exception) {
+            throw ValidationException::withMessages([
+                $this->queryExceptionField($exception) => $this->queryExceptionMessage($exception),
+            ]);
+        }
 
         return response($record, 201);
     }
@@ -161,12 +167,19 @@ class ResourceController extends Controller
             ->where(fn ($query) => $query->where('uuid', $id)->orWhere('id', $id))
             ->firstOrFail();
         $payload = $this->payload($request, true);
+        $payload = $this->filterPayloadForTable($record->getTable(), $payload);
         $this->guardStatusTransition($record, $payload);
         if (explode('.', $request->route()->getName())[0] === 'products') {
             app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), $record->uuid);
         }
-        $record->update($payload);
-        $this->audit($request, 'update', $record->uuid, $payload);
+        try {
+            $record->update($payload);
+            $this->audit($request, 'update', $record->uuid, $payload);
+        } catch (QueryException $exception) {
+            throw ValidationException::withMessages([
+                $this->queryExceptionField($exception) => $this->queryExceptionMessage($exception),
+            ]);
+        }
 
         return $record;
     }
@@ -427,17 +440,21 @@ class ResourceController extends Controller
             return;
         }
 
-        \App\Models\AuditLog::create([
-            'uuid' => (string) Str::uuid(),
-            'license_uuid' => $payload['license_uuid'] ?? $request->user()?->license_uuid,
-            'business_type' => $payload['business_type'] ?? $request->user()?->business_type,
-            'user_name' => optional($request->user())->name ?: 'API User',
-            'action' => $action,
-            'entity' => $resource,
-            'entity_uuid' => $uuid,
-            'details' => "{$action} {$resource}",
-            'metadata' => $payload,
-        ]);
+        try {
+            \App\Models\AuditLog::create($this->filterPayloadForTable('audit_logs', [
+                'uuid' => (string) Str::uuid(),
+                'license_uuid' => $payload['license_uuid'] ?? $request->user()?->license_uuid,
+                'business_type' => $payload['business_type'] ?? $request->user()?->business_type,
+                'user_name' => optional($request->user())->name ?: 'API User',
+                'action' => $action,
+                'entity' => $resource,
+                'entity_uuid' => $uuid,
+                'details' => "{$action} {$resource}",
+                'metadata' => $payload,
+            ]));
+        } catch (\Throwable $exception) {
+            Log::warning('Audit log write skipped', ['resource' => $resource, 'error' => $exception->getMessage()]);
+        }
     }
 
     private function storeRecord(Request $request, array $payload)
@@ -446,16 +463,60 @@ class ResourceController extends Controller
         $query = $this->model($request);
 
         $record = $query->where('uuid', $payload['uuid'])->first();
+        if (! $record && $resource === 'users' && ! empty($payload['email'])) {
+            $record = $query->where('email', $payload['email'])->first();
+        }
         if (! $record && $resource === 'licenses') {
             $record = $query->orWhere('license_key', $payload['license_key'] ?? '')->first();
         }
 
         if ($record) {
-            $record->update($payload);
+            $record->update($this->filterPayloadForTable($record->getTable(), $payload));
             return $record->fresh();
         }
 
-        return $query->create($payload);
+        $table = app($this->models[$resource])->getTable();
+
+        return $query->create($this->filterPayloadForTable($table, $payload));
+    }
+
+    private function filterPayloadForTable(string $table, array $payload): array
+    {
+        if (! Schema::hasTable($table)) {
+            return $payload;
+        }
+
+        return collect($payload)
+            ->filter(fn ($value, $column) => Schema::hasColumn($table, $column))
+            ->all();
+    }
+
+    private function queryExceptionField(QueryException $exception): string
+    {
+        $message = $exception->getMessage();
+        if (preg_match("/Column not found:.*Unknown column '([^']+)'/i", $message, $match)) {
+            return $match[1];
+        }
+        if (str_contains($message, 'users_email_unique') || str_contains($message, "Duplicate entry")) {
+            return 'email';
+        }
+        return 'database';
+    }
+
+    private function queryExceptionMessage(QueryException $exception): string
+    {
+        $message = $exception->getMessage();
+        if (str_contains($message, 'users_email_unique') || str_contains($message, "Duplicate entry")) {
+            return 'This email is already assigned to another user.';
+        }
+        if (preg_match("/Column not found:.*Unknown column '([^']+)'/i", $message, $match)) {
+            return "Database column {$match[1]} is missing. Run php artisan migrate --force on the backend.";
+        }
+        if (preg_match("/Field '([^']+)' doesn't have a default value/i", $message, $match)) {
+            return "Required database field {$match[1]} is missing from this request.";
+        }
+        Log::error('Resource database write failed', ['error' => $message]);
+        return 'Database write failed. Please check backend migrations and logs.';
     }
 
     private function authorizeAccess(Request $request): void
@@ -637,7 +698,13 @@ class ResourceController extends Controller
 
     private function hasLicenseColumn(string $resource): bool
     {
-        return in_array($resource, $this->licenseScopedResources, true);
+        if (! in_array($resource, $this->licenseScopedResources, true) || ! isset($this->models[$resource])) {
+            return false;
+        }
+
+        $table = app($this->models[$resource])->getTable();
+
+        return Schema::hasTable($table) && Schema::hasColumn($table, 'license_uuid');
     }
 
     private function guardStatusTransition($record, array $payload): void
