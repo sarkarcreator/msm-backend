@@ -138,7 +138,7 @@ class ResourceController extends Controller
             $payload[$businessUuidColumns[$resource]] = $payload['uuid'];
         }
         if ($resource === 'products') {
-            app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), null);
+            app(BarcodeRegistryService::class)->validateProductPayload($payload, $request->user(), $payload['uuid'] ?? null);
         }
         $record = $this->storeRecord($request, $payload);
         $this->audit($request, 'create', $record->uuid, $payload);
