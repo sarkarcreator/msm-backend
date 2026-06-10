@@ -90,15 +90,7 @@ class BarcodeRegistryService
             }
         }
 
-        $product = Product::where('license_uuid', $actor->license_uuid)
-            ->where(function ($query) use ($term) {
-                $query->where('product_name', 'like', "%{$term}%");
-                if (Schema::hasColumn('products', 'brand')) {
-                    $query->orWhere('brand', 'like', "%{$term}%");
-                }
-            })
-            ->orderBy('product_name')
-            ->first();
+        $product = $this->productTextMatches($term, $actor, 1)->first();
 
         if ($product) {
             return $this->withResults([
@@ -165,19 +157,7 @@ class BarcodeRegistryService
             }
         }
 
-        $query = Product::where('license_uuid', $actor->license_uuid)
-            ->where(function ($builder) use ($term) {
-                foreach (['product_name', 'brand', 'category', 'sku', 'product_code'] as $field) {
-                    if (Schema::hasColumn('products', $field)) {
-                        $builder->orWhere($field, 'like', "%{$term}%");
-                    }
-                }
-            })
-            ->orderByRaw("CASE WHEN product_name = ? THEN 0 WHEN product_name LIKE ? THEN 1 ELSE 2 END", [$term, "{$term}%"])
-            ->orderBy('product_name')
-            ->limit($limit * 2);
-
-        foreach ($query->get() as $product) {
+        foreach ($this->productTextMatches($term, $actor, $limit * 2) as $product) {
             $match = stripos((string) $product->product_name, $term) !== false ? 'product_name' : 'brand';
             $this->pushResult($results, $seen, $match, $product, null, 1);
             if (count($results) >= $limit) {
@@ -394,6 +374,33 @@ class BarcodeRegistryService
             ->first();
     }
 
+    private function productTextMatches(string $term, User $actor, int $limit)
+    {
+        $tokens = collect(preg_split('/\s+/', $term) ?: [])
+            ->map(fn ($token) => trim($token))
+            ->filter()
+            ->values();
+        $fields = collect(['product_name', 'brand', 'category', 'sku', 'product_code', 'pack_size', 'unit', 'variant_type'])
+            ->filter(fn ($field) => Schema::hasColumn('products', $field))
+            ->values()
+            ->all();
+
+        $query = Product::where('license_uuid', $actor->license_uuid);
+        foreach ($tokens as $token) {
+            $query->where(function ($builder) use ($fields, $token) {
+                foreach ($fields as $field) {
+                    $builder->orWhere($field, 'like', "%{$token}%");
+                }
+            });
+        }
+
+        return $query
+            ->orderByRaw("CASE WHEN product_name = ? THEN 0 WHEN product_name LIKE ? THEN 1 ELSE 2 END", [$term, "{$term}%"])
+            ->orderBy('product_name')
+            ->limit(max(1, $limit))
+            ->get();
+    }
+
     private function quantityMultiplier(string $field, $row): int
     {
         if ($field === 'carton_barcode') {
@@ -443,6 +450,13 @@ class BarcodeRegistryService
             : (string) $product->unit;
         $raw = $product->packaging_units;
         $decoded = is_array($raw) ? $raw : json_decode((string) $raw, true);
+        if (isset($decoded['units']) && is_array($decoded['units'])) {
+            $decoded = $decoded['units'];
+        } elseif (isset($decoded['levels']) && is_array($decoded['levels'])) {
+            $decoded = $decoded['levels'];
+        } elseif (isset($decoded['packaging_units']) && is_array($decoded['packaging_units'])) {
+            $decoded = $decoded['packaging_units'];
+        }
         $rows = is_array($decoded) ? array_values($decoded) : [];
         $indexed = [];
 
@@ -450,11 +464,11 @@ class BarcodeRegistryService
             if (! is_array($row)) {
                 continue;
             }
-            $key = Str::of((string) ($row['key'] ?? $row['unit'] ?? $row['label'] ?? 'level_'.($index + 1)))->lower()->replace(' ', '_')->toString();
+            $key = Str::of((string) ($row['key'] ?? $row['unit'] ?? $row['unit_name'] ?? $row['label'] ?? 'level_'.($index + 1)))->lower()->replace(' ', '_')->toString();
             $indexed[$key] = array_merge($row, [
                 'key' => $key,
                 'parent_key' => Str::of((string) ($row['parent_key'] ?? $row['parent'] ?? $row['contains_unit'] ?? 'base'))->lower()->replace(' ', '_')->toString(),
-                'conversion_quantity' => max(1, (int) ($row['conversion_quantity'] ?? $row['contains'] ?? $row['factor'] ?? $row['conversion_factor'] ?? 1)),
+                'conversion_quantity' => max(1, (int) ($row['conversion_quantity'] ?? $row['contains_quantity'] ?? $row['contains'] ?? $row['qty'] ?? $row['factor'] ?? $row['conversion_factor'] ?? $row['stock_factor'] ?? 1)),
             ]);
         }
 
@@ -472,12 +486,12 @@ class BarcodeRegistryService
             $factor = $factorFor($row);
             return [
                 'key' => $row['key'],
-                'unit' => $row['unit'] ?? $row['label'] ?? $row['key'],
-                'label' => $row['label'] ?? (($row['unit'] ?? $row['key'])." ({$factor} ".$this->pluralUnit($baseUnit).')'),
-                'barcode' => $row['barcode'] ?? $row['code'] ?? '',
+                'unit' => $row['unit'] ?? $row['unit_name'] ?? $row['label'] ?? $row['key'],
+                'label' => $row['label'] ?? (($row['unit'] ?? $row['unit_name'] ?? $row['key'])." ({$factor} ".$this->pluralUnit($baseUnit).')'),
+                'barcode' => $row['barcode'] ?? $row['secondary_barcode'] ?? $row['qr_code'] ?? $row['code'] ?? '',
                 'factor' => $factor,
-                'sale_price' => (float) ($row['sale_price'] ?? $row['price'] ?? (($product->sale_price ?? 0) * $factor)),
-                'purchase_price' => (float) ($row['purchase_price'] ?? $row['cost_price'] ?? (($product->purchase_price ?? 0) * $factor)),
+                'sale_price' => (float) ($row['sale_price'] ?? $row['unit_sale_price'] ?? $row['price'] ?? $row['default_price'] ?? (($product->sale_price ?? 0) * $factor)),
+                'purchase_price' => (float) ($row['purchase_price'] ?? $row['unit_cost_price'] ?? $row['cost_price'] ?? $row['default_cost'] ?? (($product->purchase_price ?? 0) * $factor)),
             ];
         }, array_values($indexed));
     }

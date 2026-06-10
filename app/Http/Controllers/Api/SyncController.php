@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\SyncQueue;
 use App\Services\SyncService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class SyncController extends Controller
 {
@@ -22,7 +24,24 @@ class SyncController extends Controller
             'operations.*.client_updated_at' => ['nullable', 'date'],
         ]);
 
-        return ['results' => $sync->apply($payload['device_id'], $payload['operations'], $request->user())];
+        try {
+            return ['results' => $sync->apply($payload['device_id'], $payload['operations'], $request->user())];
+        } catch (Throwable $exception) {
+            Log::error('Sync push failed', [
+                'device_id' => $payload['device_id'] ?? null,
+                'operations' => count($payload['operations'] ?? []),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'results' => collect($payload['operations'] ?? [])->map(fn ($operation) => [
+                    'uuid' => $operation['uuid'] ?? null,
+                    'status' => 'rejected',
+                    'reason' => 'sync_push_failed',
+                    'message' => 'Sync request could not be processed. Please retry after refresh.',
+                ])->all(),
+            ]);
+        }
     }
 
     public function pull(Request $request)

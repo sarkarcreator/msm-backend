@@ -59,13 +59,14 @@ class MobileShopEnterpriseService
                     throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
-                $stockQuantity = max(1, (int) ($item['stock_quantity'] ?? ($quantity * max(1, (int) ($item['conversion_factor'] ?? 1)))));
+                $item = $this->withResolvedPackaging($product, $item);
+                $stockQuantity = $this->stockQuantityForItem($product, $item, $quantity);
                 if ((int) $product->quantity < $stockQuantity) {
                     throw ValidationException::withMessages(['stock' => "{$product->product_name} stock is not enough."]);
                 }
 
                 $imei = $this->isMobileShopTenant($actor) ? $this->resolveImeiForSale($item, $product, $actor) : null;
-                $price = (float) ($item['price'] ?? $product->sale_price ?? 0);
+                $price = $this->salePriceForItem($product, $item);
                 $subtotal += $quantity * $price;
                 $profit += ($quantity * $price) - ((float) ($product->purchase_price ?? 0) * $stockQuantity);
                 $saleItems[] = compact('product', 'imei', 'quantity', 'stockQuantity', 'price', 'item');
@@ -204,7 +205,12 @@ class MobileShopEnterpriseService
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('uuid');
-            $total = $items->sum(fn ($item) => max(1, (int) ($item['quantity'] ?? 1)) * (float) ($item['cost_price'] ?? $item['purchase_price'] ?? 0));
+            $total = $items->sum(function ($item) use ($productRows) {
+                $product = $productRows->get($item['product_uuid'] ?? '');
+                $quantity = max(1, (int) ($item['quantity'] ?? 1));
+                $item = $product ? $this->withResolvedPackaging($product, $item) : $item;
+                return $quantity * $this->purchasePriceForItem($product, $item);
+            });
             $paid = (float) ($payload['paid'] ?? 0);
             $balance = max(0, $total - $paid);
 
@@ -233,8 +239,9 @@ class MobileShopEnterpriseService
                     throw ValidationException::withMessages(['product_uuid' => 'Product not found in this tenant inventory.']);
                 }
                 $quantity = max(1, (int) ($item['quantity'] ?? 1));
-                $stockQuantity = max(1, (int) ($item['stock_quantity'] ?? ($quantity * max(1, (int) ($item['conversion_factor'] ?? 1)))));
-                $cost = (float) ($item['cost_price'] ?? $item['purchase_price'] ?? 0);
+                $item = $this->withResolvedPackaging($product, $item);
+                $stockQuantity = $this->stockQuantityForItem($product, $item, $quantity);
+                $cost = $this->purchasePriceForItem($product, $item);
                 $product->update([
                     'purchase_price' => $cost,
                     'quantity' => (int) $product->quantity + $stockQuantity,
@@ -665,6 +672,165 @@ class MobileShopEnterpriseService
             'to_status' => $toStatus,
             'moved_at' => now(),
         ]));
+    }
+
+    private function withResolvedPackaging(Product $product, array $item): array
+    {
+        $unit = $this->packagingUnitForItem($product, $item);
+        if (! $unit) {
+            return $item;
+        }
+
+        return array_merge($item, [
+            'selected_unit_key' => $unit['key'],
+            'selected_unit' => $item['selected_unit'] ?? $unit['unit'],
+            'selected_unit_label' => $item['selected_unit_label'] ?? $unit['label'],
+            'conversion_factor' => $unit['factor'],
+            'unit_barcode' => $item['unit_barcode'] ?? $unit['barcode'],
+            '_resolved_unit' => $unit,
+        ]);
+    }
+
+    private function stockQuantityForItem(Product $product, array $item, int $quantity): int
+    {
+        $factor = max(1, (int) ($item['conversion_factor'] ?? $item['_resolved_unit']['factor'] ?? 1));
+        return max(1, $quantity * $factor);
+    }
+
+    private function salePriceForItem(Product $product, array $item): float
+    {
+        $unit = $item['_resolved_unit'] ?? null;
+        $basePrice = (float) ($product->sale_price ?? 0);
+        $unitPrice = (float) ($unit['sale_price'] ?? 0);
+        $inputProvided = array_key_exists('price', $item);
+        $inputPrice = (float) ($item['price'] ?? 0);
+
+        if (! $inputProvided || $inputPrice <= 0) {
+            return $unitPrice > 0 ? $unitPrice : $basePrice;
+        }
+        if ($unitPrice > 0 && (int) ($unit['factor'] ?? 1) > 1 && abs($inputPrice - $basePrice) < 0.01) {
+            return $unitPrice;
+        }
+
+        return $inputPrice;
+    }
+
+    private function purchasePriceForItem(?Product $product, array $item): float
+    {
+        $unit = $product ? ($item['_resolved_unit'] ?? null) : null;
+        $basePrice = (float) ($product?->purchase_price ?? 0);
+        $unitPrice = (float) ($unit['purchase_price'] ?? 0);
+        $inputProvided = array_key_exists('cost_price', $item) || array_key_exists('purchase_price', $item);
+        $inputPrice = (float) ($item['cost_price'] ?? $item['purchase_price'] ?? 0);
+
+        if (! $inputProvided || $inputPrice <= 0) {
+            return $unitPrice > 0 ? $unitPrice : $basePrice;
+        }
+        if ($unitPrice > 0 && (int) ($unit['factor'] ?? 1) > 1 && abs($inputPrice - $basePrice) < 0.01) {
+            return $unitPrice;
+        }
+
+        return $inputPrice;
+    }
+
+    private function packagingUnitForItem(Product $product, array $item): ?array
+    {
+        $units = $this->productPackagingUnits($product);
+        $wantedKey = $this->unitKey($item['selected_unit_key'] ?? '');
+        $wantedUnit = $this->unitKey($item['selected_unit'] ?? '');
+        $wantedLabel = $this->unitKey(preg_replace('/\s*\(.*/', '', (string) ($item['selected_unit_label'] ?? '')) ?: '');
+        $wantedBarcode = trim((string) ($item['unit_barcode'] ?? $item['barcode'] ?? ''));
+
+        foreach ($units as $unit) {
+            if ($wantedKey && $unit['key'] === $wantedKey) {
+                return $unit;
+            }
+            if ($wantedUnit && $this->unitKey($unit['unit']) === $wantedUnit) {
+                return $unit;
+            }
+            if ($wantedLabel && $this->unitKey($unit['unit']) === $wantedLabel) {
+                return $unit;
+            }
+            if ($wantedBarcode && $unit['barcode'] && $unit['barcode'] === $wantedBarcode) {
+                return $unit;
+            }
+        }
+
+        return $units[0] ?? null;
+    }
+
+    private function productPackagingUnits(Product $product): array
+    {
+        $baseUnit = in_array((string) ($product->unit ?? ''), ['', 'Single Unit', 'Unit'], true)
+            ? (string) ($product->variant_type ?? 'Piece')
+            : (string) $product->unit;
+        $base = [
+            'key' => 'base',
+            'unit' => $baseUnit ?: 'Piece',
+            'label' => $baseUnit ?: 'Piece',
+            'factor' => 1,
+            'barcode' => (string) ($product->barcode ?? ''),
+            'sale_price' => (float) ($product->sale_price ?? 0),
+            'purchase_price' => (float) ($product->purchase_price ?? 0),
+        ];
+
+        $raw = $product->packaging_units;
+        $decoded = is_array($raw) ? $raw : json_decode((string) $raw, true);
+        if (isset($decoded['units']) && is_array($decoded['units'])) {
+            $decoded = $decoded['units'];
+        } elseif (isset($decoded['levels']) && is_array($decoded['levels'])) {
+            $decoded = $decoded['levels'];
+        } elseif (isset($decoded['packaging_units']) && is_array($decoded['packaging_units'])) {
+            $decoded = $decoded['packaging_units'];
+        }
+        $rows = is_array($decoded) ? array_values($decoded) : [];
+        $indexed = [];
+
+        foreach ($rows as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $key = $this->unitKey($row['key'] ?? $row['unit'] ?? $row['unit_name'] ?? $row['label'] ?? 'level_'.($index + 1));
+            $indexed[$key] = array_merge($row, [
+                'key' => $key,
+                'parent_key' => $this->unitKey($row['parent_key'] ?? $row['parent'] ?? $row['contains_unit'] ?? 'base'),
+                'conversion_quantity' => max(1, (int) ($row['conversion_quantity'] ?? $row['contains_quantity'] ?? $row['contains'] ?? $row['qty'] ?? $row['factor'] ?? $row['conversion_factor'] ?? $row['stock_factor'] ?? 1)),
+            ]);
+        }
+
+        $factorFor = function (array $row, array $seen = []) use (&$factorFor, &$indexed): int {
+            if (($row['key'] ?? 'base') === 'base' || in_array($row['key'], $seen, true)) {
+                return 1;
+            }
+            $seen[] = $row['key'];
+            $parent = ($row['parent_key'] ?? 'base') === 'base' ? null : ($indexed[$row['parent_key']] ?? null);
+            $parentFactor = $parent ? $factorFor($parent, $seen) : 1;
+            return max(1, (int) ($row['conversion_quantity'] ?? 1)) * $parentFactor;
+        };
+
+        $levels = array_map(function (array $row) use ($factorFor, $baseUnit, $product) {
+            $factor = $factorFor($row);
+            $unit = (string) ($row['unit'] ?? $row['unit_name'] ?? $row['label'] ?? $row['key']);
+            return [
+                'key' => $row['key'],
+                'unit' => $unit,
+                'label' => $row['label'] ?? "{$unit} ({$factor} ".$this->pluralUnit($baseUnit ?: 'Piece').')',
+                'factor' => $factor,
+                'barcode' => (string) ($row['barcode'] ?? $row['secondary_barcode'] ?? $row['qr_code'] ?? $row['code'] ?? ''),
+                'sale_price' => (float) ($row['sale_price'] ?? $row['unit_sale_price'] ?? $row['price'] ?? $row['default_price'] ?? (($product->sale_price ?? 0) * $factor)),
+                'purchase_price' => (float) ($row['purchase_price'] ?? $row['unit_cost_price'] ?? $row['cost_price'] ?? $row['default_cost'] ?? (($product->purchase_price ?? 0) * $factor)),
+            ];
+        }, array_values($indexed));
+
+        return array_values(array_reduce([$base, ...$levels], function ($carry, $unit) {
+            $carry[$unit['key']] = $unit;
+            return $carry;
+        }, []));
+    }
+
+    private function unitKey($value): string
+    {
+        return Str::of((string) $value)->lower()->replace(' ', '_')->toString();
     }
 
     private function inventory(User $actor, Product $product, string $type, int $quantity, string $reference, string $reason, array $item = []): void

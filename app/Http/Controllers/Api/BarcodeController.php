@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Services\BarcodeRegistryService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class BarcodeController extends Controller
 {
@@ -19,7 +20,22 @@ class BarcodeController extends Controller
             'limit' => ['nullable', 'integer', 'min:0', 'max:25'],
         ]);
 
-        return response()->json($this->barcodes->lookup($payload['q'], $request->user(), (int) ($payload['limit'] ?? 0)));
+        try {
+            return response()->json($this->barcodes->lookup($payload['q'], $request->user(), (int) ($payload['limit'] ?? 0)));
+        } catch (ValidationException $exception) {
+            if ((int) ($payload['limit'] ?? 0) > 0) {
+                return response()->json([
+                    'match_type' => 'no_match',
+                    'scan' => $payload['q'],
+                    'product' => null,
+                    'imei' => null,
+                    'quantity_multiplier' => 1,
+                    'results' => $this->barcodes->suggestions($payload['q'], $request->user(), (int) $payload['limit']),
+                ]);
+            }
+
+            throw $exception;
+        }
     }
 
     public function receive(Request $request)
