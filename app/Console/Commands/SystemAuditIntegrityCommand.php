@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Schema;
 
 class SystemAuditIntegrityCommand extends Command
 {
-    protected $signature = 'system:audit-integrity {--json : Output JSON report}';
+    protected $signature = 'system:audit-integrity
+        {--json : Output JSON report}
+        {--repair : Run production-safe repair pass where supported}';
 
     protected $description = 'Audit cross-module tenant, sync, inventory and financial integrity without modifying data.';
 
@@ -40,6 +42,10 @@ class SystemAuditIntegrityCommand extends Command
             'inventory_mismatches' => $this->inventoryMismatchReport(),
         ];
 
+        if ($this->option('repair')) {
+            $report['repair'] = $this->repairReport($report);
+        }
+
         if ($this->option('json')) {
             $this->line(json_encode($report, JSON_PRETTY_PRINT));
             return self::SUCCESS;
@@ -60,6 +66,19 @@ class SystemAuditIntegrityCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    private function repairReport(array $report): array
+    {
+        return [[
+            'mode' => 'safe_audit_only',
+            'changes_applied' => 0,
+            'note' => 'System repair flag is enabled, but no automatic destructive repair is performed by this command.',
+            'remaining_issues' => collect($report)
+                ->reject(fn ($rows, $section) => $section === 'generated_at')
+                ->filter(fn ($rows) => is_countable($rows) && count($rows) > 0)
+                ->count(),
+        ]];
     }
 
     private function tenantScopeReport(): array
