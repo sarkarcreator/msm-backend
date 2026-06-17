@@ -17,13 +17,23 @@ class LicenseActivationController extends Controller
     public function activate(Request $request)
     {
         $data = $request->validate([
-            'license_key' => ['required', 'string'],
-            'activation_code' => ['required', 'string'],
-            'device_id' => ['required', 'string'],
-            'shop_name' => ['nullable', 'string'],
-            'name' => ['required', 'string'],
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string', 'min:6'],
+            'license_key' => ['required', 'string', 'max:255'],
+            'activation_code' => ['required', 'string', 'max:255'],
+            'device_id' => ['required', 'string', 'max:255'],
+            'shop_name' => ['nullable', 'string', 'max:255'],
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255'],
+            'password' => [
+                'required',
+                'string',
+                'min:8',
+                'max:72', // Maximum length for bcrypt compatibility
+                'regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).+$/', // Mixed case, number, special character
+            ],
+        ], [
+            'password.regex' => 'Password must contain at least 8 characters, including uppercase, lowercase, number, and special character.',
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.max' => 'Password cannot exceed 72 characters.',
         ]);
 
         $license = License::where('license_key', $data['license_key'])

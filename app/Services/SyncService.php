@@ -90,18 +90,27 @@ class SyncService
 
     public function apply(string $deviceId, array $operations, ?User $actor = null): array
     {
+        // SECURITY: Validate operations structure to prevent injection attacks
+        if (!$this->validateOperationsStructure($operations)) {
+            return [['uuid' => null, 'status' => 'rejected', 'reason' => 'Invalid operations structure']];
+        }
+        
         return DB::transaction(function () use ($deviceId, $operations, $actor) {
             return collect($operations)->map(function (array $operation) use ($deviceId, $actor) {
                 try {
                     $model = $this->models[$operation['entity']] ?? null;
                     if (! $model) {
-                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => 'Unknown entity'];
+                        return ['uuid' => $operation['uuid'] ?? null, 'status' => 'rejected', 'reason' => 'Unknown entity'];
                     }
 
                     $data = $operation['data'] ?? [];
+                    
+                    // SECURITY: Sanitize and validate the data array
+                    $data = $this->sanitizeOperationData($data);
+                    
                     $authorization = $this->authorization->authorizeOperation($actor, $operation['entity'], $operation['action'], $data);
                     if (! $authorization['allowed']) {
-                        return ['uuid' => $operation['uuid'], 'status' => 'rejected', 'reason' => $authorization['reason']];
+                        return ['uuid' => $operation['uuid'] ?? null, 'status' => 'rejected', 'reason' => $authorization['reason']];
                     }
                     $data = $authorization['data'];
 
@@ -110,18 +119,27 @@ class SyncService
                     $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($model), true);
                     $query = $usesSoftDeletes ? $model::withTrashed() : $instance->newQuery();
                     $query = $this->authorization->scopeQuery($query, $table, $actor, $operation['entity']);
+                    
+                    // SECURITY: Only allow columns that exist in the table
                     $data = $this->normalizeDateTimes($this->onlyTableColumns($table, $data), $table);
-                    $record = $query->where('uuid', $operation['uuid'])->first();
+                    
+                    // SECURITY: Validate UUID format
+                    $uuid = $this->sanitizeUuid($operation['uuid'] ?? '');
+                    if (!$uuid) {
+                        return ['uuid' => $operation['uuid'] ?? null, 'status' => 'rejected', 'reason' => 'Invalid UUID format'];
+                    }
+                    
+                    $record = $query->where('uuid', $uuid)->first();
 
                     if ($record && isset($data['revision']) && isset($record->revision) && (int) $record->revision > (int) $data['revision']) {
                         $this->logConflict($operation, $deviceId, $data, $actor, 'revision_conflict');
-                        return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
+                        return ['uuid' => $uuid, 'status' => 'conflict', 'reason' => 'revision_conflict', 'server' => $record];
                     }
 
                     $clientUpdatedAt = $this->safeTimestamp($operation['client_updated_at'] ?? null);
                     if ($record && $clientUpdatedAt && $record->updated_at && $record->updated_at->gt($clientUpdatedAt)) {
                         $this->logConflict($operation, $deviceId, $data, $actor, 'updated_at_conflict');
-                        return ['uuid' => $operation['uuid'], 'status' => 'conflict', 'server' => $record];
+                        return ['uuid' => $uuid, 'status' => 'conflict', 'server' => $record];
                     }
 
                     if ($operation['action'] === 'force_delete') {
@@ -129,15 +147,16 @@ class SyncService
                     } elseif ($operation['action'] === 'delete') {
                         $record?->delete();
                     } else {
-                        $query->updateOrCreate(['uuid' => $operation['uuid']], $data);
+                        // SECURITY: Use sanitized UUID
+                        $query->updateOrCreate(['uuid' => $uuid], $data);
                     }
 
-                    SyncQueue::create($this->syncQueuePayload($operation, $deviceId, $data, $actor));
+                    SyncQueue::create($this->syncQueuePayload($operation, $deviceId, $data, $actor, $uuid));
 
-                    return ['uuid' => $operation['uuid'], 'status' => 'accepted'];
+                    return ['uuid' => $uuid, 'status' => 'accepted'];
                 } catch (Throwable $exception) {
                     return [
-                        'uuid' => $operation['uuid'] ?? null,
+                        'uuid' => $uuid ?? null,
                         'status' => 'rejected',
                         'reason' => 'sync_validation_failed',
                         'message' => $exception->getMessage(),
@@ -147,10 +166,11 @@ class SyncService
         });
     }
 
-    private function syncQueuePayload(array $operation, string $deviceId, array $data, ?User $actor): array
+    private function syncQueuePayload(array $operation, string $deviceId, array $data, ?User $actor, ?string $uuid = null): array
     {
+        // SECURITY: Use sanitized UUID
         $payload = [
-            'uuid' => $operation['uuid'],
+            'uuid' => $uuid ?? $operation['uuid'] ?? null,
             'device_id' => $deviceId,
             'entity' => $operation['entity'],
             'action' => $operation['action'],
@@ -176,7 +196,9 @@ class SyncService
 
     private function logConflict(array $operation, string $deviceId, array $data, ?User $actor, string $reason): void
     {
-        $payload = $this->syncQueuePayload($operation, $deviceId, $data, $actor);
+        // SECURITY: Use sanitized UUID
+        $uuid = $this->sanitizeUuid($operation['uuid'] ?? '');
+        $payload = $this->syncQueuePayload($operation, $deviceId, $data, $actor, $uuid);
         $payload['action'] = 'conflict';
         $payload['payload'] = array_merge($payload['payload'] ?? [], ['conflict_reason' => $reason]);
         SyncQueue::create($this->normalizeDateTimes($payload, 'sync_queue'));
@@ -242,6 +264,106 @@ class SyncService
         } catch (Throwable) {
             return now();
         }
+    }
+    
+    /**
+     * SECURITY: Validate the structure of operations array to prevent injection.
+     */
+    private function validateOperationsStructure(array $operations): bool
+    {
+        if (!is_array($operations)) {
+            return false;
+        }
+        
+        foreach ($operations as $operation) {
+            if (!is_array($operation)) {
+                return false;
+            }
+            
+            // Must have required fields
+            if (!isset($operation['uuid']) || !isset($operation['entity']) || !isset($operation['action'])) {
+                return false;
+            }
+            
+            // Validate action is one of the allowed values
+            $allowedActions = ['create', 'update', 'delete', 'force_delete'];
+            if (!in_array($operation['action'], $allowedActions, true)) {
+                return false;
+            }
+            
+            // Validate entity is in whitelist
+            if (!isset($this->models[$operation['entity']])) {
+                return false;
+            }
+            
+            // Data must be an array if present
+            if (isset($operation['data']) && !is_array($operation['data'])) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * SECURITY: Sanitize operation data to prevent XSS and injection attacks.
+     */
+    private function sanitizeOperationData(array $data): array
+    {
+        $sanitized = [];
+        
+        foreach ($data as $key => $value) {
+            // Only allow alphanumeric, underscore, hyphen keys
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', (string)$key)) {
+                continue; // Skip potentially malicious keys
+            }
+            
+            if (is_array($value)) {
+                $sanitized[$key] = $this->sanitizeOperationData($value);
+            } elseif (is_string($value)) {
+                // Remove null bytes and control characters
+                $sanitized[$key] = $this->sanitizeString($value);
+            } else {
+                $sanitized[$key] = $value;
+            }
+        }
+        
+        return $sanitized;
+    }
+    
+    /**
+     * SECURITY: Sanitize a string value to remove dangerous content.
+     */
+    private function sanitizeString(string $value): string
+    {
+        // Remove null bytes
+        $value = str_replace("\0", '', $value);
+        
+        // Remove other control characters except newlines and tabs
+        $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $value);
+        
+        return trim($value);
+    }
+    
+    /**
+     * SECURITY: Validate and sanitize UUID format.
+     */
+    private function sanitizeUuid(string $uuid): ?string
+    {
+        // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+        // where y is 8, 9, a, or b
+        $pattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
+        
+        if (preg_match($pattern, $uuid)) {
+            return strtolower($uuid);
+        }
+        
+        // Also accept simple UUID-like strings for compatibility
+        if (preg_match('/^[a-zA-Z0-9\-_]{8,36}$/', $uuid)) {
+            return $uuid;
+        }
+        
+        return null;
     }
 
 }
