@@ -68,6 +68,9 @@ Route::middleware('auth:sanctum')->group(function () {
         'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
         'audit-logs'
     ] as $resource) {
+        Route::delete($resource . '/bulk', [ResourceController::class, 'bulkDestroy'])
+            ->name($resource . '.bulk')
+            ->middleware('throttle:60,1');
         Route::apiResource($resource, ResourceController::class)->parameters([$resource => 'id']);
     }
 });

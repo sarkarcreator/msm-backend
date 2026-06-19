@@ -235,6 +235,49 @@ class ResourceController extends Controller
         return response()->noContent();
     }
 
+    public function bulkDestroy(Request $request)
+    {
+        $this->authorizeAccess($request);
+        $resource = explode('.', $request->route()->getName())[0];
+        $force = $request->boolean('force');
+        $validated = $request->validate([
+            'uuids' => ['required', 'array', 'min:1', 'max:500'],
+            'uuids.*' => ['required', 'string', 'max:100'],
+        ]);
+        $ids = collect($validated['uuids'])->filter()->unique()->values();
+        $deleted = [];
+
+        DB::transaction(function () use ($request, $resource, $force, $ids, &$deleted) {
+            $records = $this->model($request)
+                ->where(fn ($query) => $query->whereIn('uuid', $ids)->orWhereIn('id', $ids))
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($records as $record) {
+                $payload = $record->toArray();
+                $uuid = $record->uuid;
+                $this->deleteBlockingRelations($request, $resource, $record, $force);
+                $force ? $record->forceDelete() : $record->delete();
+                $this->queueTombstone($request, $resource, $uuid, $payload, $force);
+                $this->audit($request, $force ? 'bulk_permanent_delete' : 'bulk_soft_delete', $uuid, $payload);
+                $deleted[] = $uuid;
+            }
+        });
+
+        Log::info('Bulk delete completed', [
+            'resource' => $resource,
+            'deleted_count' => count($deleted),
+            'deleted_ids' => $deleted,
+            'force' => $force,
+            'actor_uuid' => $request->user()?->uuid,
+        ]);
+
+        return response()->json([
+            'deleted_count' => count($deleted),
+            'deleted_ids' => $deleted,
+        ]);
+    }
+
     private function deleteBlockingRelations(Request $request, string $resource, $record, bool $force): void
     {
         if ($resource === 'sales') {
@@ -638,6 +681,9 @@ class ResourceController extends Controller
             if ($resource === 'patients' && blank($payload['token_number'] ?? null)) {
                 $payload['token_number'] = $this->nextPatientToken($request);
             }
+            if ($resource === 'master-catalogs') {
+                $payload = $this->normalizeMasterCatalogPayload($payload);
+            }
             return $payload;
         }
 
@@ -673,6 +719,45 @@ class ResourceController extends Controller
         }
 
         return $payload;
+    }
+
+    private function normalizeMasterCatalogPayload(array $payload): array
+    {
+        $name = $payload['product_name'] ?? $payload['name'] ?? null;
+        if ($name) {
+            $payload['name'] = $name;
+            $payload['product_name'] = $name;
+        }
+
+        $payload['default_cost'] = $this->nonNegativeMoney(
+            $payload['default_cost'] ?? $payload['cost_price'] ?? $payload['purchase_price'] ?? $payload['unit_cost_price'] ?? 0,
+            'default_cost'
+        );
+        $payload['default_price'] = $this->nonNegativeMoney(
+            $payload['default_price'] ?? $payload['selling_price'] ?? $payload['sale_price'] ?? $payload['unit_sale_price'] ?? 0,
+            'default_price'
+        );
+
+        unset(
+            $payload['cost_price'],
+            $payload['purchase_price'],
+            $payload['unit_cost_price'],
+            $payload['selling_price'],
+            $payload['sale_price'],
+            $payload['unit_sale_price']
+        );
+
+        return $payload;
+    }
+
+    private function nonNegativeMoney(mixed $value, string $field): float
+    {
+        $number = (float) ($value ?? 0);
+        if ($number < 0) {
+            throw ValidationException::withMessages([$field => 'Price values cannot be negative.']);
+        }
+
+        return $number;
     }
 
     private function assignableRoles(Request $request): array
