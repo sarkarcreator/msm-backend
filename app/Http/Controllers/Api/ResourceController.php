@@ -325,6 +325,21 @@ class ResourceController extends Controller
                 'customer_id' => $record->id,
                 'customer_uuid' => $record->uuid,
             ], $force);
+            $this->deleteRows($request, 'payments', \App\Models\Payment::class, [
+                'customer_uuid' => $record->uuid,
+            ], $force);
+            $this->deleteLegacyTableRows('customer_payments', [
+                'customer_id' => $record->id,
+                'customer_uuid' => $record->uuid,
+            ]);
+            $this->deleteLegacyTableRows('credits', [
+                'customer_id' => $record->id,
+                'customer_uuid' => $record->uuid,
+            ]);
+            $this->nullifyRows($request, 'sales', \App\Models\Sale::class, [
+                'customer_id' => $record->id,
+                'customer_uuid' => $record->uuid,
+            ], ['customer_id', 'customer_uuid']);
         }
 
         if ($resource === 'suppliers') {
@@ -332,6 +347,13 @@ class ResourceController extends Controller
                 'supplier_id' => $record->id,
                 'supplier_uuid' => $record->uuid,
             ], $force);
+            $this->deleteRows($request, 'payments', \App\Models\Payment::class, [
+                'supplier_uuid' => $record->uuid,
+            ], $force);
+            $this->nullifyRows($request, 'purchases', \App\Models\Purchase::class, [
+                'supplier_id' => $record->id,
+                'supplier_uuid' => $record->uuid,
+            ], ['supplier_id', 'supplier_uuid']);
         }
 
         if ($resource === 'products') {
@@ -398,6 +420,41 @@ class ResourceController extends Controller
             $force ? $row->forceDelete() : $row->delete();
             if (! empty($row->uuid)) {
                 $this->queueTombstone($request, $resource, $row->uuid, $payload, $force);
+            }
+        }
+    }
+
+    private function nullifyRows(Request $request, string $resource, string $model, array $matches, array $columns): void
+    {
+        $instance = app($model);
+        $table = $instance->getTable();
+        if (! Schema::hasTable($table) || ! $this->hasAnyMatchColumn($table, $matches)) {
+            return;
+        }
+
+        $availableColumns = array_values(array_filter($columns, fn ($column) => Schema::hasColumn($table, $column)));
+        if (! count($availableColumns)) {
+            return;
+        }
+
+        $query = $model::withTrashed()->where(function ($where) use ($table, $matches) {
+            foreach ($matches as $column => $value) {
+                if ($value !== null && Schema::hasColumn($table, $column)) {
+                    $where->orWhere($column, $value);
+                }
+            }
+        });
+
+        foreach ($query->get() as $row) {
+            $payload = $row->toArray();
+            foreach ($availableColumns as $column) {
+                $row->{$column} = null;
+                $payload[$column] = null;
+            }
+            $row->save();
+            if (! empty($row->uuid)) {
+                $this->queueResourceUpdate($request, $resource, $row->uuid, $row->fresh()->toArray());
+                $this->audit($request, 'detach_deleted_parent', $row->uuid, $payload);
             }
         }
     }
@@ -839,6 +896,33 @@ class ResourceController extends Controller
         }
         if (Schema::hasColumn('sync_queue', 'is_tombstone')) {
             $row['is_tombstone'] = true;
+        }
+
+        \App\Models\SyncQueue::create($row);
+    }
+
+    private function queueResourceUpdate(Request $request, string $resource, string $uuid, array $payload): void
+    {
+        $row = [
+            'uuid' => (string) Str::uuid(),
+            'device_id' => $request->header('X-Device-Id', 'api'),
+            'entity' => str_replace('-', '_', $resource),
+            'action' => 'update',
+            'payload' => $payload,
+            'synced_at' => now(),
+        ];
+
+        if (Schema::hasColumn('sync_queue', 'license_uuid')) {
+            $row['license_uuid'] = $payload['license_uuid'] ?? $request->user()?->license_uuid;
+        }
+        if (Schema::hasColumn('sync_queue', 'business_type')) {
+            $row['business_type'] = $payload['business_type'] ?? $request->user()?->business_type;
+        }
+        if (Schema::hasColumn('sync_queue', 'record_updated_at')) {
+            $row['record_updated_at'] = now();
+        }
+        if (Schema::hasColumn('sync_queue', 'is_tombstone')) {
+            $row['is_tombstone'] = false;
         }
 
         \App\Models\SyncQueue::create($row);
