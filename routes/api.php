@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BarcodeController;
+use App\Http\Controllers\Api\BusinessContextController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\GeneralStoreEnterpriseController;
 use App\Http\Controllers\Api\HospitalWorkflowController;
@@ -20,6 +21,7 @@ Route::get('/health', fn () => ['status' => 'ok']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/business-context', BusinessContextController::class);
     Route::get('/dashboard', DashboardController::class);
     Route::get('/barcode/lookup', [BarcodeController::class, 'lookup'])->middleware('throttle:240,1');
     Route::post('/barcode/receive', [BarcodeController::class, 'receive'])->middleware('throttle:120,1');
