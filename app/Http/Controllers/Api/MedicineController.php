@@ -26,7 +26,15 @@ class MedicineController extends Controller
     public function search(Request $request)
     {
         $this->authorizeRead($request);
-        $cacheKey = 'medicines:search:' . md5(json_encode($request->query()));
+        $user = $request->user();
+        $cacheScope = [
+            'license_uuid' => (string) ($user?->license_uuid ?? ''),
+            'business_type' => (string) ($user?->business_type ?? ''),
+        ];
+        $cacheKey = 'medicines:search:' . md5(json_encode([
+            'scope' => $cacheScope,
+            'query' => $request->query(),
+        ]));
         $perPage = min(max($request->integer('per_page', 25), 10), 100);
 
         $records = Cache::remember($cacheKey, 60, fn () => $this->filteredQuery($request)->limit($perPage)->get());
