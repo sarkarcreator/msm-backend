@@ -23,26 +23,41 @@ return new class extends Migration {
         });
 
         // Existing medicine rows pre-date tenant scoping. Only assign them
-        // automatically when the database has exactly one tenant license;
-        // with multiple tenants, leaving them unassigned is safer than
-        // exposing one tenant's medicine data to another tenant.
-        if (Schema::hasColumn('medicines', 'license_uuid') && Schema::hasTable('licenses')) {
-            $tenantLicenses = DB::table('licenses')
-                ->whereNull('deleted_at')
-                ->whereNotNull('uuid')
-                ->get(['uuid', 'business_type']);
-
-            if ($tenantLicenses->count() === 1) {
-                $license = $tenantLicenses->first();
-
-                DB::table('medicines')
-                    ->whereNull('license_uuid')
-                    ->update([
-                        'license_uuid' => $license->uuid,
-                        'business_type' => $license->business_type,
-                    ]);
-            }
+        // automatically when the database has exactly one usable tenant
+        // license. With multiple tenants, leaving them unassigned is safer
+        // than exposing one tenant's medicine data to another tenant.
+        if (! Schema::hasTable('licenses') || ! Schema::hasColumn('licenses', 'uuid')) {
+            return;
         }
+
+        $licenseColumns = Schema::getColumnListing('licenses');
+        $select = ['uuid'];
+        $hasBusinessType = in_array('business_type', $licenseColumns, true);
+
+        if ($hasBusinessType) {
+            $select[] = 'business_type';
+        }
+
+        $query = DB::table('licenses')->whereNotNull('uuid');
+
+        if (in_array('deleted_at', $licenseColumns, true)) {
+            $query->whereNull('deleted_at');
+        }
+
+        $tenantLicenses = $query->get($select);
+
+        if ($tenantLicenses->count() !== 1) {
+            return;
+        }
+
+        $license = $tenantLicenses->first();
+
+        DB::table('medicines')
+            ->whereNull('license_uuid')
+            ->update([
+                'license_uuid' => $license->uuid,
+                'business_type' => $hasBusinessType ? ($license->business_type ?? null) : null,
+            ]);
     }
 
     public function down(): void
