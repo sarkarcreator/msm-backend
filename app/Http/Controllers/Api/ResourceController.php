@@ -297,7 +297,7 @@ class ResourceController extends Controller
                 'sale_id' => $record->id,
                 'sale_uuid' => $record->uuid,
             ], $force);
-            $this->deleteLegacyTableRows('credits', [
+            $this->deleteLegacyTableRows($request, 'credits', [
                 'sale_id' => $record->id,
                 'sale_uuid' => $record->uuid,
             ]);
@@ -328,11 +328,11 @@ class ResourceController extends Controller
             $this->deleteRows($request, 'payments', \App\Models\Payment::class, [
                 'customer_uuid' => $record->uuid,
             ], $force);
-            $this->deleteLegacyTableRows('customer_payments', [
+            $this->deleteLegacyTableRows($request, 'customer_payments', [
                 'customer_id' => $record->id,
                 'customer_uuid' => $record->uuid,
             ]);
-            $this->deleteLegacyTableRows('credits', [
+            $this->deleteLegacyTableRows($request, 'credits', [
                 'customer_id' => $record->id,
                 'customer_uuid' => $record->uuid,
             ]);
@@ -389,7 +389,7 @@ class ResourceController extends Controller
                 'product_id' => $record->id,
                 'product_uuid' => $record->uuid,
             ], $force);
-            $this->deleteLegacyTableRows('imei_numbers', [
+            $this->deleteLegacyTableRows($request, 'imei_numbers', [
                 'product_id' => $record->id,
                 'product_uuid' => $record->uuid,
             ]);
@@ -459,7 +459,7 @@ class ResourceController extends Controller
         }
     }
 
-    private function deleteLegacyTableRows(string $table, array $matches): void
+    private function deleteLegacyTableRows(Request $request, string $table, array $matches): void
     {
         if (! Schema::hasTable($table)) {
             return;
@@ -475,6 +475,23 @@ class ResourceController extends Controller
                 }
             }
         });
+
+        $user = $request->user();
+        $role = optional($user?->role)->name;
+        if ($role !== 'Super Admin') {
+            $licenseUuid = (string) ($user?->license_uuid ?? '');
+            abort_unless($licenseUuid !== '', 403, 'Tenant scope is required.');
+
+            if (Schema::hasColumn($table, 'license_uuid')) {
+                $query->where('license_uuid', $licenseUuid);
+            }
+
+            if (Schema::hasColumn($table, 'business_type')) {
+                $businessType = trim((string) ($user?->business_type ?? ''));
+                abort_unless($businessType !== '', 403, 'Business scope is required.');
+                $query->where('business_type', $businessType);
+            }
+        }
 
         $query->delete();
     }
@@ -619,163 +636,14 @@ class ResourceController extends Controller
         return 'Database write failed. Please check backend migrations and logs.';
     }
 
-    private function authorizeAccess(Request $request): void
+    private function nonNegativeMoney(mixed $value, string $field): float
     {
-        $resource = explode('.', $request->route()->getName())[0];
-        $role = optional($request->user()?->role)->name ?: 'Cashier';
-
-        $allowed = match ($role) {
-            'Super Admin' => array_keys($this->models),
-            'Admin' => [
-                'products', 'categories', 'brands', 'customers', 'customer-ledgers',
-                'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
-                'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
-                'repair-updates', 'inventory-transactions', 'users', 'roles',
-                'notifications', 'manual-repair-receipts', 'mobile-wallet-transactions',
-                'patients', 'assistants', 'hospital-prescriptions', 'hospital-orders',
-                'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills',
-                'hospital-bill-items', 'master-catalogs', 'imei-registry',
-                'imei-movements', 'warranty-claims', 'sale-returns', 'sale-return-items',
-                'purchase-returns', 'purchase-return-items',
-                'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
-                'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
-                'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
-            ],
-            'Manager' => [
-                'products', 'categories', 'brands', 'customers', 'customer-ledgers',
-                'sales', 'sale-items', 'suppliers', 'supplier-ledgers', 'purchases',
-                'purchase-items', 'expenses', 'payments', 'cashbook', 'repairs',
-                'repair-updates', 'inventory-transactions', 'notifications',
-                'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'assistants',
-                'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports',
-                'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs',
-                'imei-registry', 'imei-movements', 'warranty-claims', 'sale-returns',
-                'sale-return-items', 'purchase-returns', 'purchase-return-items',
-                'trader-companies', 'trader-brands', 'trader-territories', 'trader-routes',
-                'trader-salesmen', 'trader-retailers', 'trader-delivery-challans',
-                'trader-recoveries', 'trader-salesman-ledgers', 'trader-distributor-ledgers',
-            ],
-            'Technician' => ['customers', 'repairs', 'repair-updates', 'manual-repair-receipts', 'patients', 'notifications', 'master-catalogs'],
-            'Hospital Owner' => ['patients', 'assistants', 'users', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
-            'Receptionist' => ['patients', 'hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'notifications', 'master-catalogs'],
-            'Doctor' => ['patients', 'assistants', 'expenses', 'cashbook', 'notifications', 'hospital-prescriptions', 'hospital-orders', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'hospital-bills', 'hospital-bill-items', 'master-catalogs'],
-            'Compounder' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
-            'Assistant' => ['patients', 'hospital-tasks', 'hospital-prescriptions', 'notifications', 'master-catalogs'],
-            'Nurse' => ['patients', 'hospital-tasks', 'notifications'],
-            'Pharmacy Staff' => ['hospital-prescriptions', 'products', 'inventory-transactions', 'notifications', 'medicines'],
-            'Lab Technician' => ['lab-reports', 'hospital-tasks', 'notifications'],
-            'X-Ray Technician' => ['radiology-reports', 'hospital-tasks', 'notifications'],
-            'Billing Officer' => ['hospital-bills', 'hospital-bill-items', 'hospital-tasks', 'lab-reports', 'radiology-reports', 'patients', 'notifications'],
-            'Cashier' => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'mobile-wallet-transactions', 'manual-repair-receipts', 'notifications', 'master-catalogs', 'imei-registry', 'warranty-claims', 'sale-returns', 'sale-return-items', 'trader-retailers', 'trader-recoveries'],
-            default => ['customers', 'customer-ledgers', 'sales', 'sale-items', 'payments', 'cashbook', 'manual-repair-receipts', 'mobile-wallet-transactions', 'patients', 'notifications', 'master-catalogs'],
-        };
-
-        abort_unless(in_array($resource, $allowed, true), 403, 'You do not have permission to access this module.');
-
-        if ($role !== 'Super Admin') {
-            $businessType = $request->user()?->business_type ?: 'General Store';
-            abort_unless($this->businessTypeAllowsResource($businessType, $resource), 403, 'This module is not available for this business type.');
-        }
-    }
-
-    private function businessTypeAllowsResource(string $businessType, string $resource): bool
-    {
-        $key = strtolower(str_replace([' ', '-'], '_', trim($businessType)));
-        $key = match ($key) {
-            'mobile', 'mobile_shop' => 'mobile_shop',
-            'hospital' => 'hospital',
-            'pharmacy' => 'pharmacy',
-            'traders' => 'traders',
-            'electronics_store' => 'electronics_store',
-            'general_store', 'grocery_store', 'grocery', 'shopping_mall', 'retail_shop' => 'general_store',
-            default => 'generic_shop',
-        };
-
-        if ($key !== 'hospital' && in_array($resource, $this->hospitalOnlyResources, true)) {
-            return false;
+        $number = (float) ($value ?? 0);
+        if ($number < 0) {
+            throw ValidationException::withMessages([$field => 'Price values cannot be negative.']);
         }
 
-        if ($key !== 'mobile_shop' && in_array($resource, $this->mobileShopOnlyResources, true)) {
-            return false;
-        }
-
-        if (! in_array($key, ['mobile_shop', 'electronics_store'], true) && in_array($resource, $this->repairOnlyResources, true)) {
-            return false;
-        }
-
-        if ($key !== 'traders' && in_array($resource, $this->tradersOnlyResources, true)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private function payload(Request $request, bool $updating = false): array
-    {
-        $resource = explode('.', $request->route()->getName())[0];
-        $payload = $request->except(['id', 'created_at', 'updated_at', 'deleted_at', 'sync_status']);
-
-        if ($resource === 'licenses') {
-            $payload = array_intersect_key($payload, array_flip([
-                'uuid', 'license_key', 'activation_code', 'owner_name', 'business_type', 'device_id',
-                'type', 'status', 'trial', 'expiry_date', 'activated_at', 'metadata',
-            ]));
-
-            if (! empty($payload['activated_at'])) {
-                $payload['activated_at'] = Carbon::parse($payload['activated_at'])->format('Y-m-d H:i:s');
-            }
-
-            return $payload;
-        }
-
-        if ($resource !== 'users') {
-            if ($request->user()?->license_uuid && $this->hasLicenseColumn($resource)) {
-                $payload['license_uuid'] = $request->user()->license_uuid;
-            }
-            if ($request->user()?->business_type && $this->hasLicenseColumn($resource)) {
-                $payload['business_type'] = $request->user()->business_type;
-            }
-            if ($resource === 'patients' && blank($payload['token_number'] ?? null)) {
-                $payload['token_number'] = $this->nextPatientToken($request);
-            }
-            if ($resource === 'master-catalogs') {
-                $payload = $this->normalizeMasterCatalogPayload($payload);
-            }
-            return $payload;
-        }
-
-        unset($payload['role'], $payload['status']);
-
-        if ($request->filled('role')) {
-            $requestedRole = $request->string('role')->toString();
-            $allowedRoles = $this->assignableRoles($request);
-
-            abort_unless(in_array($requestedRole, $allowedRoles, true), 403, 'You cannot assign this user role.');
-
-            $role = Role::firstOrCreate(
-                ['name' => $requestedRole],
-                ['uuid' => (string) Str::uuid()]
-            );
-            $payload['role_id'] = $role->id;
-        }
-
-        $actor = $request->user();
-        $actorRole = optional($actor?->role)->name;
-
-        if ($actorRole !== 'Super Admin') {
-            $payload['license_uuid'] = $actor?->license_uuid;
-            $payload['business_type'] = $actor?->business_type ?: ($payload['business_type'] ?? 'General Store');
-            $payload['shop_name'] = $actor?->shop_name ?: ($payload['shop_name'] ?? 'Retail Shop');
-        } else {
-            $payload['business_type'] = $payload['business_type'] ?? $actor?->business_type;
-            $payload['shop_name'] = $payload['shop_name'] ?? $actor?->shop_name;
-        }
-
-        if ($updating && blank($request->input('password'))) {
-            unset($payload['password']);
-        }
-
-        return $payload;
+        return $number;
     }
 
     private function normalizeMasterCatalogPayload(array $payload): array
@@ -805,16 +673,6 @@ class ResourceController extends Controller
         );
 
         return $payload;
-    }
-
-    private function nonNegativeMoney(mixed $value, string $field): float
-    {
-        $number = (float) ($value ?? 0);
-        if ($number < 0) {
-            throw ValidationException::withMessages([$field => 'Price values cannot be negative.']);
-        }
-
-        return $number;
     }
 
     private function assignableRoles(Request $request): array
