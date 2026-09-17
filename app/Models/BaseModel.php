@@ -36,7 +36,7 @@ abstract class BaseModel extends Model
             $model = $builder->getModel();
             $table = $model->getTable();
 
-            if (! $user || ($user->role?->name ?? null) === 'Super Admin') {
+            if (! $user || self::isSuperAdmin($user)) {
                 return;
             }
 
@@ -52,7 +52,7 @@ abstract class BaseModel extends Model
 
         static::creating(function (Model $model) {
             $user = Auth::user();
-            if (! $user || ($user->role?->name ?? null) === 'Super Admin') {
+            if (! $user || self::isSuperAdmin($user)) {
                 return;
             }
 
@@ -71,7 +71,7 @@ abstract class BaseModel extends Model
 
         static::updating(function (Model $model) {
             $user = Auth::user();
-            if (! $user || ($user->role?->name ?? null) === 'Super Admin') {
+            if (! $user || self::isSuperAdmin($user)) {
                 return;
             }
 
@@ -89,5 +89,22 @@ abstract class BaseModel extends Model
                 $model->setAttribute('business_type', $user->business_type);
             }
         });
+    }
+
+    private static function isSuperAdmin($user): bool
+    {
+        if ($user->relationLoaded('role')) {
+            return ($user->getRelation('role')?->name ?? null) === 'Super Admin';
+        }
+
+        if (! $user->role_id) {
+            return false;
+        }
+
+        // Role also extends BaseModel, so bypass its tenant scope here to avoid
+        // recursively resolving the authenticated user's role.
+        return (string) Role::withoutGlobalScope('tenant')
+            ->whereKey($user->role_id)
+            ->value('name') === 'Super Admin';
     }
 }
