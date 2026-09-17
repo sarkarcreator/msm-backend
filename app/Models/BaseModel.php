@@ -44,10 +44,29 @@ abstract class BaseModel extends Model
                 return;
             }
 
-            // A tenant-scoped table must never fall back to NULL/unscoped rows.
-            // ResourceController separately rejects tenant API access without a
-            // license; this guard also protects direct model queries.
-            $builder->where($model->qualifyColumn('license_uuid'), (string) ($user->license_uuid ?? ''));
+            $licenseUuid = (string) ($user->license_uuid ?? '');
+            if ($licenseUuid === '') {
+                // Never allow a tenant request without a license to fall back
+                // to NULL/unscoped rows on a tenant-owned table.
+                $builder->whereRaw('1 = 0');
+                return;
+            }
+
+            $builder->where($model->qualifyColumn('license_uuid'), $licenseUuid);
+
+            // A license is the tenant boundary; business_type is the product
+            // context boundary. When both columns exist, require both to match
+            // so a single tenant can never accidentally read another business
+            // context's records.
+            if (Schema::hasColumn($table, 'business_type')) {
+                $businessType = trim((string) ($user->business_type ?? ''));
+                if ($businessType === '') {
+                    $builder->whereRaw('1 = 0');
+                    return;
+                }
+
+                $builder->where($model->qualifyColumn('business_type'), $businessType);
+            }
         });
 
         static::creating(function (Model $model) {
