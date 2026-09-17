@@ -70,7 +70,10 @@ class AuthController extends Controller
                 'software_name' => 'DSH License Control',
                 'shop_name' => 'DSH Digital Solutions Hub',
                 'company_name' => 'DSH Digital Solutions Hub',
-                'business_type' => 'General Store',
+                // Super Admin is a control-plane account, not a licensed retail tenant.
+                // Keep business_type empty so the frontend does not route sales through
+                // tenant-only enterprise endpoints that require a license UUID.
+                'business_type' => '',
                 'license_uuid' => '',
             ];
         }
