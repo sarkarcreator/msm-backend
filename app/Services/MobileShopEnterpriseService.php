@@ -164,8 +164,9 @@ class MobileShopEnterpriseService
             }
 
             $this->cashbook($actor, 'Sale', $sale->invoice_number, $paid, 0, $sale->uuid);
+            $customerLedger = null;
             if ($customer && $balance > 0) {
-                $this->customerLedger($actor, $customer, 'Sale Credit', $balance, $sale->invoice_number, $payload['due_date'] ?? null);
+                $customerLedger = $this->customerLedger($actor, $customer, 'Sale Credit', $balance, $sale->invoice_number, $payload['due_date'] ?? null);
             }
             $this->audit($actor, 'mobile_sale_created', 'sales', $sale->uuid, $sale->toArray());
             $this->queueMany($actor, [
@@ -178,6 +179,8 @@ class MobileShopEnterpriseService
 
             return [
                 'sale' => $sale->fresh(),
+                'customer' => $customer?->fresh(),
+                'customer_ledger' => $customerLedger,
                 'sale_items' => collect($createdItems)->map->fresh()->values(),
                 'products' => collect($saleItems)->map(fn ($line) => $line['product']->fresh())->values(),
                 'imeis' => collect($touchedImeis)->map->fresh()->values(),
@@ -868,9 +871,9 @@ class MobileShopEnterpriseService
         ]);
     }
 
-    private function customerLedger(User $actor, Customer $customer, string $type, float $amount, string $reference, ?string $dueDate): void
+    private function customerLedger(User $actor, Customer $customer, string $type, float $amount, string $reference, ?string $dueDate): CustomerLedger
     {
-        $this->createRecord(new CustomerLedger(), [
+        $ledger = $this->createRecord(new CustomerLedger(), [
             'uuid' => (string) Str::uuid(),
             'license_uuid' => $actor->license_uuid,
             'business_type' => $actor->business_type,
@@ -883,6 +886,7 @@ class MobileShopEnterpriseService
             'entry_at' => now(),
         ]);
         $customer->update(['balance' => (float) $customer->balance + $amount]);
+        return $ledger->fresh();
     }
 
     private function supplierLedger(User $actor, Supplier $supplier, string $type, float $amount, string $reference): void
